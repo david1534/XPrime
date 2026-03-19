@@ -1,0 +1,16 @@
+[Unit]
+Description=Pi Remote Control WebSocket Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Environment=DISPLAY=:0
+WorkingDirectory=/opt/pi-remote
+ExecStart=/usr/bin/python3 /opt/pi-remote/remote_server.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
