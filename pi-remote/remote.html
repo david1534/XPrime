@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="X Remote">
+    <meta name="theme-color" content="#1a1a1a">
+    <title>X Prime Remote</title>
+    <link rel="manifest" href="data:application/json;base64,eyJuYW1lIjoiWCBQcmltZSBSZW1vdGUiLCJzaG9ydF9uYW1lIjoiWCBSZW1vdGUiLCJzdGFydF91cmwiOiIvIiwiZGlzcGxheSI6InN0YW5kYWxvbmUiLCJiYWNrZ3JvdW5kX2NvbG9yIjoiIzFhMWExYSIsInRoZW1lX2NvbG9yIjoiIzFhMWExYSJ9">
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
+        }
+        html, body {
+            height: 100%;
+            overscroll-behavior: none;
+            overflow: hidden;
+        }
+        body {
+            background: #1a1a1a;
+            color: #e0e0e0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 12px 16px;
+            padding-top: max(12px, env(safe-area-inset-top));
+            padding-bottom: max(12px, env(safe-area-inset-bottom));
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        /* --- Header --- */
+        .header {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            margin-bottom: 16px;
+            font-size: 16px;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+        }
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #f44;
+            transition: background 0.3s;
+        }
+        .status-dot.connected {
+            background: #4c4;
+        }
+
+        /* --- Remote layout --- */
+        .remote {
+            width: 100%;
+            max-width: 380px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            flex: 1;
+            overflow-y: auto;
+            overflow-x: hidden;
+        }
+
+        /* --- Buttons --- */
+        button {
+            background: #2a2a2a;
+            color: #e0e0e0;
+            border: 1px solid #3a3a3a;
+            border-radius: 12px;
+            font-size: 16px;
+            font-weight: 500;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: background 0.1s, transform 0.05s;
+            min-height: 52px;
+            touch-action: manipulation;
+        }
+        button:active {
+            background: #444;
+            transform: scale(0.96);
+        }
+
+        /* --- D-pad --- */
+        .dpad {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            grid-template-rows: 1fr 1fr 1fr;
+            gap: 6px;
+            aspect-ratio: 3 / 3;
+            max-height: 180px;
+        }
+        .dpad button {
+            font-size: 22px;
+            min-height: unset;
+        }
+        .dpad-up    { grid-column: 2; grid-row: 1; border-radius: 12px 12px 4px 4px; }
+        .dpad-left  { grid-column: 1; grid-row: 2; border-radius: 12px 4px 4px 12px; }
+        .dpad-ok    { grid-column: 2; grid-row: 2; background: #3a5a8a; border-color: #4a6a9a; font-size: 18px; font-weight: 700; border-radius: 8px; }
+        .dpad-ok:active { background: #5a7aaa; }
+        .dpad-right { grid-column: 3; grid-row: 2; border-radius: 4px 12px 12px 4px; }
+        .dpad-down  { grid-column: 2; grid-row: 3; border-radius: 4px 4px 12px 12px; }
+
+        /* --- Button rows --- */
+        .row {
+            display: flex;
+            gap: 8px;
+        }
+        .row button {
+            flex: 1;
+        }
+        .row-3 button {
+            font-size: 14px;
+        }
+
+        /* --- Play/Pause --- */
+        .playpause {
+            background: #2a4a2a;
+            border-color: #3a5a3a;
+            font-size: 18px;
+            min-height: 56px;
+        }
+        .playpause:active {
+            background: #4a6a4a;
+        }
+
+        /* --- Touchpad --- */
+        .touchpad-label {
+            font-size: 12px;
+            color: #888;
+            text-align: center;
+            margin-top: 4px;
+        }
+        .touchpad {
+            width: 100%;
+            height: 120px;
+            background: #222;
+            border: 1px solid #3a3a3a;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #555;
+            font-size: 14px;
+            position: relative;
+            overflow: hidden;
+        }
+        .touchpad::after {
+            content: "";
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 30px;
+            height: 30px;
+            transform: translate(-50%, -50%);
+            border: 1px solid #3a3a3a;
+            border-radius: 50%;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="status-dot" id="statusDot"></div>
+        <span>X Prime Remote</span>
+    </div>
+
+    <div class="remote">
+        <!-- D-pad -->
+        <div class="dpad">
+            <button class="dpad-up"    data-action="up">&#9650;</button>
+            <button class="dpad-left"  data-action="left">&#9664;</button>
+            <button class="dpad-ok"    data-action="select">OK</button>
+            <button class="dpad-right" data-action="right">&#9654;</button>
+            <button class="dpad-down"  data-action="down">&#9660;</button>
+        </div>
+
+        <!-- Play/Pause -->
+        <button class="playpause" data-action="playpause">&#9199;  Play / Pause</button>
+
+        <!-- Back + Fullscreen -->
+        <div class="row">
+            <button data-action="back">&#8592; Back</button>
+            <button data-action="fullscreen">&#9974; Fullscreen</button>
+        </div>
+
+        <!-- Scroll -->
+        <div class="row">
+            <button data-action="scroll_up">&#8593; Scroll Up</button>
+            <button data-action="scroll_down">&#8595; Scroll Down</button>
+        </div>
+
+        <!-- Utility -->
+        <div class="row row-3">
+            <button data-action="tab">Tab</button>
+            <button data-action="escape">Esc</button>
+            <button data-action="reload">Reload</button>
+        </div>
+
+        <!-- Mouse touchpad -->
+        <div class="touchpad-label">Mouse Touchpad — drag to move, tap to click</div>
+        <div class="touchpad" id="touchpad">
+            <span>&#8982;</span>
+        </div>
+    </div>
+
+    <script>
+        // --- WebSocket ---
+        const statusDot = document.getElementById("statusDot");
+        let ws = null;
+        let reconnectTimer = null;
+
+        function connect() {
+            const proto = location.protocol === "https:" ? "wss:" : "ws:";
+            ws = new WebSocket(`${proto}//${location.host}/ws`);
+
+            ws.onopen = () => {
+                statusDot.classList.add("connected");
+                if (reconnectTimer) {
+                    clearTimeout(reconnectTimer);
+                    reconnectTimer = null;
+                }
+            };
+
+            ws.onclose = () => {
+                statusDot.classList.remove("connected");
+                scheduleReconnect();
+            };
+
+            ws.onerror = () => {
+                ws.close();
+            };
+        }
+
+        function scheduleReconnect() {
+            if (!reconnectTimer) {
+                reconnectTimer = setTimeout(() => {
+                    reconnectTimer = null;
+                    connect();
+                }, 2000);
+            }
+        }
+
+        function send(data) {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify(data));
+                // Haptic feedback
+                if (navigator.vibrate) navigator.vibrate(10);
+            }
+        }
+
+        // --- Button handlers ---
+        document.querySelectorAll("[data-action]").forEach(btn => {
+            btn.addEventListener("pointerdown", (e) => {
+                e.preventDefault();
+                send({ action: btn.dataset.action });
+            });
+        });
+
+        // --- Touchpad ---
+        const touchpad = document.getElementById("touchpad");
+        let touchStartX = 0, touchStartY = 0;
+        let touchMoved = false;
+        const MOVE_THRESHOLD = 3;
+        const SENSITIVITY = 1.5;
+
+        touchpad.addEventListener("touchstart", (e) => {
+            e.preventDefault();
+            const t = e.touches[0];
+            touchStartX = t.clientX;
+            touchStartY = t.clientY;
+            touchMoved = false;
+        }, { passive: false });
+
+        touchpad.addEventListener("touchmove", (e) => {
+            e.preventDefault();
+            const t = e.touches[0];
+            const dx = t.clientX - touchStartX;
+            const dy = t.clientY - touchStartY;
+            if (Math.abs(dx) > MOVE_THRESHOLD || Math.abs(dy) > MOVE_THRESHOLD) {
+                touchMoved = true;
+                send({
+                    action: "mouse_move",
+                    dx: Math.round(dx * SENSITIVITY),
+                    dy: Math.round(dy * SENSITIVITY),
+                });
+                touchStartX = t.clientX;
+                touchStartY = t.clientY;
+            }
+        }, { passive: false });
+
+        touchpad.addEventListener("touchend", (e) => {
+            e.preventDefault();
+            if (!touchMoved) {
+                send({ action: "mouse_click" });
+                if (navigator.vibrate) navigator.vibrate(10);
+            }
+        }, { passive: false });
+
+        // --- Init ---
+        connect();
+    </script>
+</body>
+</html>
