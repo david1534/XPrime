@@ -1,15 +1,14 @@
 [Unit]
 Description=Chromium Kiosk Browser
-After=graphical-session.target
-Wants=graphical-session.target
+After=network.target
 
 [Service]
 Type=simple
 User=%I
 Environment=DISPLAY=:0
 Environment=XAUTHORITY=/home/%I/.Xauthority
-ExecStartPre=/bin/sleep 5
-ExecStart=/usr/bin/chromium-browser \
+ExecStartPre=/bin/sleep 10
+ExecStart=/usr/bin/chromium \
     --kiosk \
     --noerrdialogs \
     --disable-infobars \
@@ -29,4 +28,4 @@ Restart=always
 RestartSec=5
 
 [Install]
-WantedBy=graphical-session.target
+WantedBy=multi-user.target
