@@ -6,6 +6,7 @@ button commands into xdotool keyboard/mouse events for Chromium.
 """
 
 import asyncio
+import http
 import json
 import logging
 import os
@@ -94,35 +95,26 @@ def handle_action(data: dict) -> None:
         log.warning("Unknown action: %s", action)
 
 
-# --- HTTP handler (serves remote.html) ---
+async def process_request(path, request_headers):
+    """Serve remote.html for regular HTTP requests (legacy websockets API)."""
+    if path == "/ws":
+        return None  # allow WebSocket upgrade
 
-async def http_handler(path, request_headers):
-    """Intercept HTTP requests and serve the remote UI for non-WebSocket paths."""
-    # This is called by websockets library before the WebSocket handshake.
-    # Return an HTTP response tuple to serve static content,
-    # or None to proceed with WebSocket upgrade.
-    pass  # handled below in process_request
-
-
-async def process_request(connection, request):
-    """Serve remote.html for regular HTTP requests."""
-    if request.path == "/ws":
-        return  # allow WebSocket upgrade
-
-    # Serve the HTML file for any other path
     if REMOTE_HTML.exists():
         body = REMOTE_HTML.read_bytes()
-        return connection.respond(200, "OK", websockets.Headers({
-            "Content-Type": "text/html; charset=utf-8",
-            "Content-Length": str(len(body)),
-            "Cache-Control": "no-cache",
-        }), body)
+        headers = [
+            ("Content-Type", "text/html; charset=utf-8"),
+            ("Content-Length", str(len(body))),
+            ("Cache-Control", "no-cache"),
+        ]
+        return http.HTTPStatus.OK, headers, body
     else:
         body = b"remote.html not found"
-        return connection.respond(404, "Not Found", websockets.Headers({
-            "Content-Type": "text/plain",
-            "Content-Length": str(len(body)),
-        }), body)
+        headers = [
+            ("Content-Type", "text/plain"),
+            ("Content-Length", str(len(body))),
+        ]
+        return http.HTTPStatus.NOT_FOUND, headers, body
 
 
 # --- WebSocket handler ---
