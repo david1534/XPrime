@@ -43,10 +43,10 @@ log = logging.getLogger("pi-remote")
 
 # --- Command mapping ---
 COMMANDS = {
-    "up":         ["xdotool", "key", "Up"],
-    "down":       ["xdotool", "key", "Down"],
-    "left":       ["xdotool", "key", "Left"],
-    "right":      ["xdotool", "key", "Right"],
+    "up":         ["xdotool", "key", "shift+Tab"],
+    "down":       ["xdotool", "key", "Tab"],
+    "left":       ["xdotool", "key", "shift+Tab"],
+    "right":      ["xdotool", "key", "Tab"],
     "select":     ["xdotool", "key", "Return"],
     "back":       ["xdotool", "key", "alt+Left"],
     "playpause":  ["xdotool", "key", "space"],
