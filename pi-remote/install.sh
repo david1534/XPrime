@@ -42,7 +42,7 @@ apt-get install -y -qq \
     xdotool \
     unclutter \
     python3-websockets \
-    chromium-browser \
+    chromium \
     avahi-daemon \
     > /dev/null
 
@@ -101,7 +101,7 @@ echo "  Unclutter will hide cursor after 3 seconds of inactivity."
 
 # --- Step 7: Check Widevine DRM ---
 echo "[7/7] Checking Widevine DRM support..."
-WIDEVINE_LIB=$(find /usr/lib/chromium-browser /opt/chromium.org 2>/dev/null \
+WIDEVINE_LIB=$(find /usr/lib/chromium-browser /usr/lib/chromium /opt/chromium.org 2>/dev/null \
     -name "libwidevinecdm.so" -print -quit || true)
 if [ -n "$WIDEVINE_LIB" ]; then
     echo "  Widevine found: $WIDEVINE_LIB"
