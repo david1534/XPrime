@@ -3,6 +3,10 @@
 Pi Remote Control Server
 WebSocket + HTTP server that serves the remote UI and translates
 button commands into xdotool keyboard/mouse events for Chromium.
+
+D-pad navigation is card-aware: it skips small sub-buttons (play/add/info)
+and only lands on full movie card elements, then moves the mouse cursor to
+the card center to trigger hover effects.
 """
 
 import asyncio
@@ -20,9 +24,7 @@ try:
     from websockets.server import serve
     from websockets.client import connect as ws_connect
 except ImportError:
-    print("Error: 'websockets' package not found. Install with:")
-    print("  sudo apt install python3-websockets")
-    print("  or: pip3 install websockets")
+    print("Error: 'websockets' package not found.")
     sys.exit(1)
 
 # --- Configuration ---
@@ -33,7 +35,10 @@ DISPLAY = os.environ.get("DISPLAY", ":0")
 REMOTE_HTML = Path(__file__).parent / "remote.html"
 LOG_FILE = Path(__file__).parent / "remote_server.log"
 
-# --- Logging ---
+# Elements smaller than this (in either dimension) are considered sub-buttons,
+# not movie cards. Adjust if needed.
+CARD_MIN_SIZE = 80
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -44,7 +49,6 @@ logging.basicConfig(
 )
 log = logging.getLogger("pi-remote")
 
-# --- Navigation key mapping ---
 NAV_KEYS = {
     "up":    "Up",
     "down":  "Down",
@@ -67,7 +71,6 @@ SCROLL_REPEAT = 3
 
 
 def run_xdotool(cmd: list[str]) -> None:
-    """Execute an xdotool command with the correct DISPLAY."""
     env = os.environ.copy()
     env["DISPLAY"] = DISPLAY
     try:
@@ -76,11 +79,10 @@ def run_xdotool(cmd: list[str]) -> None:
     except subprocess.CalledProcessError as e:
         log.error("xdotool error: %s — %s", cmd, e.stderr.decode().strip())
     except FileNotFoundError:
-        log.error("xdotool not found. Install with: sudo apt install xdotool")
+        log.error("xdotool not found.")
 
 
 def get_cdp_ws_url() -> str | None:
-    """Get the Chrome DevTools Protocol WebSocket URL for the active page."""
     try:
         with urllib.request.urlopen(f"http://localhost:{CDP_PORT}/json", timeout=2) as r:
             tabs = json.loads(r.read())
@@ -92,44 +94,95 @@ def get_cdp_ws_url() -> str | None:
     return None
 
 
-async def move_mouse_to_focused_element() -> None:
-    """Use CDP to find the focused element and move the mouse cursor to it."""
+# JS that returns the focused element's bounding box and whether it's card-sized
+FOCUSED_ELEMENT_JS = """
+(function() {
+    var el = document.activeElement;
+    if (!el || el === document.body || el === document.documentElement) return null;
+    var r = el.getBoundingClientRect();
+    return {
+        x: Math.round(r.left + r.width / 2),
+        y: Math.round(r.top + r.height / 2),
+        w: Math.round(r.width),
+        h: Math.round(r.height)
+    };
+})()
+"""
+
+# JS that clicks the primary action (play button) on the currently hovered card.
+# Tries to find a play button within the focused/hovered element's parent card,
+# falls back to clicking the element itself.
+CLICK_PRIMARY_ACTION_JS = """
+(function() {
+    var el = document.activeElement;
+    if (!el || el === document.body) return 'no_focus';
+    // Walk up to find the card container
+    var card = el;
+    for (var i = 0; i < 5; i++) {
+        if (!card.parentElement) break;
+        var r = card.getBoundingClientRect();
+        if (r.width > %d && r.height > %d) break;
+        card = card.parentElement;
+    }
+    // Find the first/primary button or link inside the card
+    var btn = card.querySelector('a, button, [role="button"]');
+    if (btn) { btn.click(); return 'clicked_primary'; }
+    el.click();
+    return 'clicked_self';
+})()
+""" % (CARD_MIN_SIZE, CARD_MIN_SIZE)
+
+
+async def cdp_navigate(key: str) -> None:
+    """
+    Press a navigation key, then check if we landed on a card-sized element.
+    If we landed on a small sub-button, keep pressing the same key until we
+    reach a card, or until we've tried MAX_SKIPS times.
+    Then move the mouse to the card center to trigger hover.
+    """
+    MAX_SKIPS = 8
     ws_url = get_cdp_ws_url()
+
+    run_xdotool(["xdotool", "key", key])
+
     if not ws_url:
         return
+
     try:
         async with ws_connect(ws_url, open_timeout=2) as cdp:
-            # Get bounding box of the focused element
-            msg_id = 1
-            await cdp.send(json.dumps({
-                "id": msg_id,
-                "method": "Runtime.evaluate",
-                "params": {
-                    "expression": """
-                        (function() {
-                            var el = document.activeElement;
-                            if (!el || el === document.body) return null;
-                            var r = el.getBoundingClientRect();
-                            return {
-                                x: Math.round(r.left + r.width / 2),
-                                y: Math.round(r.top + r.height / 2)
-                            };
-                        })()
-                    """,
-                    "returnByValue": True,
-                }
-            }))
-            response = json.loads(await asyncio.wait_for(cdp.recv(), timeout=2))
-            result = response.get("result", {}).get("result", {})
-            pos = result.get("value")
-            if pos and pos.get("x") and pos.get("y"):
-                run_xdotool(["xdotool", "mousemove", str(pos["x"]), str(pos["y"])])
+            for attempt in range(MAX_SKIPS):
+                await asyncio.sleep(0.08)
+
+                await cdp.send(json.dumps({
+                    "id": 1,
+                    "method": "Runtime.evaluate",
+                    "params": {"expression": FOCUSED_ELEMENT_JS, "returnByValue": True}
+                }))
+                resp = json.loads(await asyncio.wait_for(cdp.recv(), timeout=2))
+                pos = resp.get("result", {}).get("result", {}).get("value")
+
+                if not pos:
+                    break
+
+                w, h = pos.get("w", 0), pos.get("h", 0)
+                is_card = w >= CARD_MIN_SIZE and h >= CARD_MIN_SIZE
+
+                if is_card:
+                    # Move mouse to card center to trigger hover
+                    run_xdotool(["xdotool", "mousemove", str(pos["x"]), str(pos["y"])])
+                    log.debug("Landed on card (%dx%d) at %d,%d after %d skip(s)",
+                              w, h, pos["x"], pos["y"], attempt)
+                    break
+                else:
+                    # Sub-button — skip past it
+                    log.debug("Skipping sub-button (%dx%d), pressing %s again", w, h, key)
+                    run_xdotool(["xdotool", "key", key])
+
     except Exception as e:
-        log.debug("CDP mouse move failed: %s", e)
+        log.debug("CDP navigate failed: %s", e)
 
 
 async def handle_action_async(data: dict) -> None:
-    """Dispatch a single action from the remote."""
     action = data.get("action")
     if not action:
         return
@@ -145,9 +198,23 @@ async def handle_action_async(data: dict) -> None:
         dy = int(data.get("dy", 0))
         run_xdotool(["xdotool", "mousemove_relative", "--", str(dx), str(dy)])
     elif action in NAV_KEYS:
-        run_xdotool(["xdotool", "key", NAV_KEYS[action]])
-        await asyncio.sleep(0.1)
-        await move_mouse_to_focused_element()
+        await cdp_navigate(NAV_KEYS[action])
+    elif action == "select":
+        # Click the primary action on the hovered card
+        ws_url = get_cdp_ws_url()
+        if ws_url:
+            try:
+                async with ws_connect(ws_url, open_timeout=2) as cdp:
+                    await cdp.send(json.dumps({
+                        "id": 1,
+                        "method": "Runtime.evaluate",
+                        "params": {"expression": CLICK_PRIMARY_ACTION_JS, "returnByValue": True}
+                    }))
+                    await asyncio.wait_for(cdp.recv(), timeout=2)
+                    return
+            except Exception as e:
+                log.debug("CDP select failed: %s — falling back to Return key", e)
+        run_xdotool(["xdotool", "key", "Return"])
     elif action in COMMANDS:
         run_xdotool(COMMANDS[action])
     else:
@@ -155,10 +222,8 @@ async def handle_action_async(data: dict) -> None:
 
 
 async def process_request(path, request_headers):
-    """Serve remote.html for regular HTTP requests (legacy websockets API)."""
     if path == "/ws":
-        return None  # allow WebSocket upgrade
-
+        return None
     if REMOTE_HTML.exists():
         body = REMOTE_HTML.read_bytes()
         headers = [
@@ -169,17 +234,11 @@ async def process_request(path, request_headers):
         return http.HTTPStatus.OK, headers, body
     else:
         body = b"remote.html not found"
-        headers = [
-            ("Content-Type", "text/plain"),
-            ("Content-Length", str(len(body))),
-        ]
+        headers = [("Content-Type", "text/plain"), ("Content-Length", str(len(body)))]
         return http.HTTPStatus.NOT_FOUND, headers, body
 
 
-# --- WebSocket handler ---
-
 async def ws_handler(websocket):
-    """Handle a WebSocket connection from the remote UI."""
     remote = websocket.remote_address
     log.info("Client connected: %s:%s", remote[0], remote[1])
     try:
@@ -197,20 +256,12 @@ async def ws_handler(websocket):
         log.info("Client disconnected: %s:%s", remote[0], remote[1])
 
 
-# --- Main ---
-
 async def main():
     log.info("Starting Pi Remote server on %s:%d", HOST, PORT)
     log.info("Remote UI: http://<pi-ip>:%d/", PORT)
     log.info("WebSocket endpoint: ws://<pi-ip>:%d/ws", PORT)
-
-    async with serve(
-        ws_handler,
-        HOST,
-        PORT,
-        process_request=process_request,
-    ):
-        await asyncio.Future()  # run forever
+    async with serve(ws_handler, HOST, PORT, process_request=process_request):
+        await asyncio.Future()
 
 
 if __name__ == "__main__":
