@@ -222,7 +222,7 @@ async def handle_action_async(data: dict) -> None:
 
 
 async def process_request(path, request_headers):
-    if path == "/ws":
+    if path.startswith("/ws") or "upgrade" in str(request_headers).lower():
         return None
     if REMOTE_HTML.exists():
         body = REMOTE_HTML.read_bytes()
