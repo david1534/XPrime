@@ -48,8 +48,8 @@ logging.basicConfig(
 log = logging.getLogger("pi-remote")
 
 NAV_KEYS = {
-    "up":    "Left",
-    "down":  "Right",
+    "up":    "Up",
+    "down":  "Down",
     "left":  "Left",
     "right": "Right",
 }
