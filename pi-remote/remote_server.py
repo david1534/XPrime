@@ -255,6 +255,10 @@ async def handle_action(data: dict) -> None:
         except Exception:
             pass
         run_xdotool(["xdotool", "key", "space"])
+    elif action == "type":
+        text = data.get("text", "")
+        if text:
+            run_xdotool(["xdotool", "type", "--clearmodifiers", "--", text])
     elif action in COMMANDS:
         run_xdotool(COMMANDS[action])
     else:
