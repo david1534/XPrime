@@ -169,10 +169,15 @@ async def cdp_navigate(key: str) -> None:
                 return None
 
             if key in ("Up", "Down"):
-                # Get current tracked mouse position
-                mouse = await eval_js("({x: window._rmX||0, y: window._rmY||0})", 1)
-                cur_x = mouse.get("x", 0) if mouse else 0
-                cur_y = mouse.get("y", 0) if mouse else 0
+                # Get actual mouse position from xdotool
+                env = os.environ.copy()
+                env["DISPLAY"] = DISPLAY
+                try:
+                    loc = subprocess.check_output(["xdotool", "getmouselocation"], env=env, timeout=3).decode()
+                    cur_x = int(loc.split("x:")[1].split()[0])
+                    cur_y = int(loc.split("y:")[1].split()[0])
+                except Exception:
+                    cur_x, cur_y = 0, 0
 
                 cards = await eval_js(GET_ALL_CARDS_JS, 2)
                 if not cards:
@@ -202,12 +207,8 @@ async def cdp_navigate(key: str) -> None:
                     var margin = {margin};
                     var cardY = {target['y']};
                     var h = window.innerHeight;
-                    if (cardY < margin) {{
-                        window.scrollBy(0, cardY - margin);
-                    }} else if (cardY > h - margin) {{
-                        window.scrollBy(0, cardY - (h - margin));
-                    }}
-                    window._rmX={target['x']};
+                    if (cardY < margin) window.scrollBy(0, cardY - margin);
+                    else if (cardY > h - margin) window.scrollBy(0, cardY - (h - margin));
                 """
                 await eval_js(scroll_js, 3)
                 await asyncio.sleep(0.1)
@@ -219,15 +220,19 @@ async def cdp_navigate(key: str) -> None:
                     if row_cards2:
                         target = min(row_cards2, key=lambda c: abs(c["x"] - target["x"]))
 
-                await eval_js(f"window._rmX={target['x']}; window._rmY={target['y']};", 5)
                 run_xdotool(["xdotool", "mousemove", str(target["x"]), str(target["y"])])
                 log.debug("Up/Down → card at %d,%d", target["x"], target["y"])
 
             else:
                 # Left/Right: find nearest card in same row by X position
-                mouse = await eval_js("({x: window._rmX||0, y: window._rmY||0})", 1)
-                cur_x = mouse.get("x", 0) if mouse else 0
-                cur_y = mouse.get("y", 0) if mouse else 0
+                env = os.environ.copy()
+                env["DISPLAY"] = DISPLAY
+                try:
+                    loc = subprocess.check_output(["xdotool", "getmouselocation"], env=env, timeout=3).decode()
+                    cur_x = int(loc.split("x:")[1].split()[0])
+                    cur_y = int(loc.split("y:")[1].split()[0])
+                except Exception:
+                    cur_x, cur_y = 0, 0
 
                 cards = await eval_js(GET_ALL_CARDS_JS, 2)
                 if not cards:
@@ -246,7 +251,6 @@ async def cdp_navigate(key: str) -> None:
                     target = min(candidates, key=lambda c: c["x"]) if candidates else None
 
                 if target:
-                    await eval_js(f"window._rmX={target['x']}; window._rmY={target['y']};", 3)
                     run_xdotool(["xdotool", "mousemove", str(target["x"]), str(target["y"])])
                     log.debug("Left/Right → card at %d,%d", target["x"], target["y"])
 
