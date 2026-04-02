@@ -223,6 +223,18 @@ async def cdp_navigate(key: str) -> None:
         log.debug("CDP navigate failed: %s", e)
 
 
+def focus_chromium() -> None:
+    env = os.environ.copy()
+    env["DISPLAY"] = DISPLAY
+    try:
+        win_id = subprocess.check_output(
+            ["xdotool", "search", "--onlyvisible", "--class", "chromium"],
+            env=env, timeout=3).decode().strip().split()[0]
+        run_xdotool(["xdotool", "windowfocus", win_id])
+    except Exception:
+        pass
+
+
 async def handle_action(data: dict) -> None:
     action = data.get("action")
     if not action:
@@ -244,20 +256,15 @@ async def handle_action(data: dict) -> None:
         # Click at current mouse position (navigation is mouse-based)
         run_xdotool(["xdotool", "click", "1"])
     elif action == "playpause":
-        # Focus the Chromium window then send space
-        env = os.environ.copy()
-        env["DISPLAY"] = DISPLAY
-        try:
-            win_id = subprocess.check_output(
-                ["xdotool", "search", "--onlyvisible", "--class", "chromium"],
-                env=env, timeout=3).decode().strip().split()[0]
-            run_xdotool(["xdotool", "windowfocus", win_id])
-        except Exception:
-            pass
+        focus_chromium()
         run_xdotool(["xdotool", "key", "space"])
+    elif action == "back":
+        focus_chromium()
+        run_xdotool(["xdotool", "key", "alt+Left"])
     elif action == "type":
         text = data.get("text", "")
         if text:
+            focus_chromium()
             run_xdotool(["xdotool", "type", "--clearmodifiers", "--", text])
     elif action in COMMANDS:
         run_xdotool(COMMANDS[action])
