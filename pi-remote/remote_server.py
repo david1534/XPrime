@@ -1,42 +1,40 @@
 #!/usr/bin/env python3
 """
 Pi Remote Control Server
-WebSocket + HTTP server that serves the remote UI and translates
-button commands into xdotool keyboard/mouse events for Chromium.
-
-D-pad navigation is card-aware: it skips small sub-buttons (play/add/info)
-and only lands on full movie card elements, then moves the mouse cursor to
-the card center to trigger hover effects.
+- HTTP server on port 8080 serves remote.html
+- WebSocket server on port 8081 handles button commands
 """
 
 import asyncio
 import http
+import http.server
 import json
 import logging
 import os
 import subprocess
 import sys
+import threading
 import urllib.request
 from pathlib import Path
 
 try:
     import websockets
-    from websockets.server import serve
-    from websockets.client import connect as ws_connect
+    from websockets.asyncio.server import serve as ws_serve
 except ImportError:
     print("Error: 'websockets' package not found.")
     sys.exit(1)
 
 # --- Configuration ---
-HOST = "0.0.0.0"
-PORT = 8080
+HTTP_HOST = "0.0.0.0"
+HTTP_PORT = 8080
+WS_HOST = "0.0.0.0"
+WS_PORT = 8081
 CDP_PORT = 9222
 DISPLAY = os.environ.get("DISPLAY", ":0")
 REMOTE_HTML = Path(__file__).parent / "remote.html"
 LOG_FILE = Path(__file__).parent / "remote_server.log"
 
-# Elements smaller than this (in either dimension) are considered sub-buttons,
-# not movie cards. Adjust if needed.
+# Elements smaller than this are sub-buttons, not movie cards
 CARD_MIN_SIZE = 80
 
 logging.basicConfig(
@@ -94,29 +92,20 @@ def get_cdp_ws_url() -> str | None:
     return None
 
 
-# JS that returns the focused element's bounding box and whether it's card-sized
 FOCUSED_ELEMENT_JS = """
 (function() {
     var el = document.activeElement;
     if (!el || el === document.body || el === document.documentElement) return null;
     var r = el.getBoundingClientRect();
-    return {
-        x: Math.round(r.left + r.width / 2),
-        y: Math.round(r.top + r.height / 2),
-        w: Math.round(r.width),
-        h: Math.round(r.height)
-    };
+    return { x: Math.round(r.left + r.width/2), y: Math.round(r.top + r.height/2),
+             w: Math.round(r.width), h: Math.round(r.height) };
 })()
 """
 
-# JS that clicks the primary action (play button) on the currently hovered card.
-# Tries to find a play button within the focused/hovered element's parent card,
-# falls back to clicking the element itself.
-CLICK_PRIMARY_ACTION_JS = """
+CLICK_PRIMARY_JS = """
 (function() {
     var el = document.activeElement;
-    if (!el || el === document.body) return 'no_focus';
-    // Walk up to find the card container
+    if (!el || el === document.body) return;
     var card = el;
     for (var i = 0; i < 5; i++) {
         if (!card.parentElement) break;
@@ -124,65 +113,53 @@ CLICK_PRIMARY_ACTION_JS = """
         if (r.width > %d && r.height > %d) break;
         card = card.parentElement;
     }
-    // Find the first/primary button or link inside the card
     var btn = card.querySelector('a, button, [role="button"]');
-    if (btn) { btn.click(); return 'clicked_primary'; }
-    el.click();
-    return 'clicked_self';
+    if (btn) { btn.click(); } else { el.click(); }
 })()
 """ % (CARD_MIN_SIZE, CARD_MIN_SIZE)
 
 
+async def cdp_eval(cdp_ws_url: str, expression: str) -> object:
+    from websockets.asyncio.client import connect as cdp_connect
+    async with cdp_connect(cdp_ws_url, open_timeout=2) as cdp:
+        await cdp.send(json.dumps({
+            "id": 1, "method": "Runtime.evaluate",
+            "params": {"expression": expression, "returnByValue": True}
+        }))
+        resp = json.loads(await asyncio.wait_for(cdp.recv(), timeout=2))
+        return resp.get("result", {}).get("result", {}).get("value")
+
+
 async def cdp_navigate(key: str) -> None:
-    """
-    Press a navigation key, then check if we landed on a card-sized element.
-    If we landed on a small sub-button, keep pressing the same key until we
-    reach a card, or until we've tried MAX_SKIPS times.
-    Then move the mouse to the card center to trigger hover.
-    """
     MAX_SKIPS = 8
     ws_url = get_cdp_ws_url()
-
     run_xdotool(["xdotool", "key", key])
-
     if not ws_url:
         return
-
     try:
-        async with ws_connect(ws_url, open_timeout=2) as cdp:
+        from websockets.asyncio.client import connect as cdp_connect
+        async with cdp_connect(ws_url, open_timeout=2) as cdp:
             for attempt in range(MAX_SKIPS):
                 await asyncio.sleep(0.08)
-
                 await cdp.send(json.dumps({
-                    "id": 1,
-                    "method": "Runtime.evaluate",
+                    "id": attempt + 1, "method": "Runtime.evaluate",
                     "params": {"expression": FOCUSED_ELEMENT_JS, "returnByValue": True}
                 }))
                 resp = json.loads(await asyncio.wait_for(cdp.recv(), timeout=2))
                 pos = resp.get("result", {}).get("result", {}).get("value")
-
                 if not pos:
                     break
-
                 w, h = pos.get("w", 0), pos.get("h", 0)
-                is_card = w >= CARD_MIN_SIZE and h >= CARD_MIN_SIZE
-
-                if is_card:
-                    # Move mouse to card center to trigger hover
+                if w >= CARD_MIN_SIZE and h >= CARD_MIN_SIZE:
                     run_xdotool(["xdotool", "mousemove", str(pos["x"]), str(pos["y"])])
-                    log.debug("Landed on card (%dx%d) at %d,%d after %d skip(s)",
-                              w, h, pos["x"], pos["y"], attempt)
                     break
                 else:
-                    # Sub-button — skip past it
-                    log.debug("Skipping sub-button (%dx%d), pressing %s again", w, h, key)
                     run_xdotool(["xdotool", "key", key])
-
     except Exception as e:
         log.debug("CDP navigate failed: %s", e)
 
 
-async def handle_action_async(data: dict) -> None:
+async def handle_action(data: dict) -> None:
     action = data.get("action")
     if not action:
         return
@@ -200,20 +177,13 @@ async def handle_action_async(data: dict) -> None:
     elif action in NAV_KEYS:
         await cdp_navigate(NAV_KEYS[action])
     elif action == "select":
-        # Click the primary action on the hovered card
         ws_url = get_cdp_ws_url()
         if ws_url:
             try:
-                async with ws_connect(ws_url, open_timeout=2) as cdp:
-                    await cdp.send(json.dumps({
-                        "id": 1,
-                        "method": "Runtime.evaluate",
-                        "params": {"expression": CLICK_PRIMARY_ACTION_JS, "returnByValue": True}
-                    }))
-                    await asyncio.wait_for(cdp.recv(), timeout=2)
-                    return
+                await cdp_eval(ws_url, CLICK_PRIMARY_JS)
+                return
             except Exception as e:
-                log.debug("CDP select failed: %s — falling back to Return key", e)
+                log.debug("CDP select failed: %s", e)
         run_xdotool(["xdotool", "key", "Return"])
     elif action in COMMANDS:
         run_xdotool(COMMANDS[action])
@@ -221,22 +191,7 @@ async def handle_action_async(data: dict) -> None:
         log.warning("Unknown action: %s", action)
 
 
-async def process_request(path, request_headers):
-    if path.startswith("/ws") or "upgrade" in str(request_headers).lower():
-        return None
-    if REMOTE_HTML.exists():
-        body = REMOTE_HTML.read_bytes()
-        headers = [
-            ("Content-Type", "text/html; charset=utf-8"),
-            ("Content-Length", str(len(body))),
-            ("Cache-Control", "no-cache"),
-        ]
-        return http.HTTPStatus.OK, headers, body
-    else:
-        body = b"remote.html not found"
-        headers = [("Content-Type", "text/plain"), ("Content-Length", str(len(body)))]
-        return http.HTTPStatus.NOT_FOUND, headers, body
-
+# --- WebSocket handler ---
 
 async def ws_handler(websocket):
     remote = websocket.remote_address
@@ -245,22 +200,58 @@ async def ws_handler(websocket):
         async for message in websocket:
             try:
                 data = json.loads(message)
-                action = data.get("action", "?")
-                log.info("Action from %s: %s", remote[0], action)
-                await handle_action_async(data)
+                log.info("Action from %s: %s", remote[0], data.get("action", "?"))
+                await handle_action(data)
             except json.JSONDecodeError:
-                log.warning("Invalid JSON from %s: %s", remote[0], message)
-    except websockets.ConnectionClosed:
+                log.warning("Invalid JSON: %s", message)
+    except Exception:
         pass
     finally:
         log.info("Client disconnected: %s:%s", remote[0], remote[1])
 
 
+# --- HTTP server (serves remote.html, injects correct WS port) ---
+
+class RemoteHTTPHandler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        if not REMOTE_HTML.exists():
+            self.send_error(404)
+            return
+        body = REMOTE_HTML.read_bytes()
+        # Patch the WebSocket URL to use port 8081
+        body = body.replace(
+            b"${proto}//${location.host}/ws",
+            b"${proto}//${location.hostname}:%d/ws" % WS_PORT
+        )
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format, *args):
+        pass  # suppress HTTP access logs
+
+
+def run_http_server():
+    server = http.server.HTTPServer((HTTP_HOST, HTTP_PORT), RemoteHTTPHandler)
+    log.info("HTTP server on %s:%d", HTTP_HOST, HTTP_PORT)
+    server.serve_forever()
+
+
+# --- Main ---
+
 async def main():
-    log.info("Starting Pi Remote server on %s:%d", HOST, PORT)
-    log.info("Remote UI: http://<pi-ip>:%d/", PORT)
-    log.info("WebSocket endpoint: ws://<pi-ip>:%d/ws", PORT)
-    async with serve(ws_handler, HOST, PORT, process_request=process_request):
+    log.info("Starting Pi Remote — HTTP:%d  WebSocket:%d", HTTP_PORT, WS_PORT)
+
+    # HTTP server in background thread
+    t = threading.Thread(target=run_http_server, daemon=True)
+    t.start()
+
+    # WebSocket server
+    async with ws_serve(ws_handler, WS_HOST, WS_PORT):
+        log.info("WebSocket server on %s:%d", WS_HOST, WS_PORT)
         await asyncio.Future()
 
 
