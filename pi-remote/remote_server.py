@@ -225,10 +225,10 @@ async def cdp_navigate(key: str) -> None:
                     row_cards = cards  # fallback
 
                 if key == "Left":
-                    candidates = [c for c in row_cards if c["x"] < cur_x - 5]
+                    candidates = [c for c in row_cards if c["x"] < cur_x - c["w"] // 3]
                     target = max(candidates, key=lambda c: c["x"]) if candidates else None
                 else:
-                    candidates = [c for c in row_cards if c["x"] > cur_x + 5]
+                    candidates = [c for c in row_cards if c["x"] > cur_x + c["w"] // 3]
                     target = min(candidates, key=lambda c: c["x"]) if candidates else None
 
             if target:
