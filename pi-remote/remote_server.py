@@ -165,6 +165,17 @@ def get_mouse_css_pos() -> tuple[int, int]:
         return 0, 0
 
 
+FAST_TRANSITIONS_JS = """
+(function() {
+    if (document.getElementById('_rm_fast_tx')) return;
+    var s = document.createElement('style');
+    s.id = '_rm_fast_tx';
+    s.textContent = '* { transition-duration: 80ms !important; transition-delay: 0s !important; animation-duration: 80ms !important; }';
+    document.head.appendChild(s);
+})()
+"""
+
+
 async def cdp_navigate(key: str) -> None:
     ROW_TOLERANCE = 40
     ws_url = get_cdp_ws_url()
@@ -183,10 +194,13 @@ async def cdp_navigate(key: str) -> None:
                 r = json.loads(await asyncio.wait_for(cdp.recv(), timeout=2))
                 return r.get("result", {}).get("result", {}).get("value")
 
+            # Inject fast transitions (no-op if already present)
+            await eval_js(FAST_TRANSITIONS_JS, 1)
+
             # Always use the real mouse position — not JS-tracked state which can drift
             cur_x, cur_y = get_mouse_css_pos()
 
-            cards = await eval_js(GET_ALL_CARDS_JS, 1)
+            cards = await eval_js(GET_ALL_CARDS_JS, 2)
             if not cards:
                 return
 
