@@ -150,8 +150,22 @@ GET_ALL_CARDS_JS = """
 """ % (CARD_MIN_SIZE, CARD_MIN_SIZE)
 
 
+def get_mouse_css_pos() -> tuple[int, int]:
+    """Get the real current mouse position in CSS pixels (physical ÷ DEVICE_SCALE)."""
+    env = os.environ.copy()
+    env["DISPLAY"] = DISPLAY
+    try:
+        out = subprocess.check_output(
+            ["xdotool", "getmouselocation", "--shell"], env=env, timeout=2
+        ).decode()
+        x = int(next(l for l in out.splitlines() if l.startswith("X=")).split("=")[1])
+        y = int(next(l for l in out.splitlines() if l.startswith("Y=")).split("=")[1])
+        return x // DEVICE_SCALE, y // DEVICE_SCALE
+    except Exception:
+        return 0, 0
+
+
 async def cdp_navigate(key: str) -> None:
-    MAX_SKIPS = 8
     ROW_TOLERANCE = 40
     ws_url = get_cdp_ws_url()
 
@@ -169,16 +183,14 @@ async def cdp_navigate(key: str) -> None:
                 r = json.loads(await asyncio.wait_for(cdp.recv(), timeout=2))
                 return r.get("result", {}).get("result", {}).get("value")
 
+            # Always use the real mouse position — not JS-tracked state which can drift
+            cur_x, cur_y = get_mouse_css_pos()
+
+            cards = await eval_js(GET_ALL_CARDS_JS, 1)
+            if not cards:
+                return
+
             if key in ("Up", "Down"):
-                # Get current tracked mouse position
-                mouse = await eval_js("({x: window._rmX||0, y: window._rmY||0})", 1)
-                cur_x = mouse.get("x", 0) if mouse else 0
-                cur_y = mouse.get("y", 0) if mouse else 0
-
-                cards = await eval_js(GET_ALL_CARDS_JS, 2)
-                if not cards:
-                    return
-
                 if key == "Up":
                     candidates = [c for c in cards if c["y"] < cur_y - ROW_TOLERANCE]
                     target_row_y = max((c["y"] for c in candidates), default=None)
@@ -192,36 +204,24 @@ async def cdp_navigate(key: str) -> None:
                 row_cards = [c for c in cards if abs(c["y"] - target_row_y) <= ROW_TOLERANCE]
                 target = min(row_cards, key=lambda c: abs(c["x"] - cur_x))
 
-                await eval_js(f"window._rmX={target['x']}; window._rmY={target['y']};", 3)
-                run_xdotool(["xdotool", "mousemove", str(target["x"] * DEVICE_SCALE), str(target["y"] * DEVICE_SCALE)])
-                log.debug("Up/Down → card at %d,%d", target["x"], target["y"])
-
             else:
-                # Left/Right: find nearest card in same row by X position
-                mouse = await eval_js("({x: window._rmX||0, y: window._rmY||0})", 1)
-                cur_x = mouse.get("x", 0) if mouse else 0
-                cur_y = mouse.get("y", 0) if mouse else 0
-
-                cards = await eval_js(GET_ALL_CARDS_JS, 2)
-                if not cards:
-                    return
-
                 # Same row = within ROW_TOLERANCE pixels vertically
                 row_cards = [c for c in cards if abs(c["y"] - cur_y) <= ROW_TOLERANCE]
                 if not row_cards:
                     row_cards = cards  # fallback
 
                 if key == "Left":
-                    candidates = [c for c in row_cards if c["x"] < cur_x - 10]
+                    candidates = [c for c in row_cards if c["x"] < cur_x - 5]
                     target = max(candidates, key=lambda c: c["x"]) if candidates else None
                 else:
-                    candidates = [c for c in row_cards if c["x"] > cur_x + 10]
+                    candidates = [c for c in row_cards if c["x"] > cur_x + 5]
                     target = min(candidates, key=lambda c: c["x"]) if candidates else None
 
-                if target:
-                    await eval_js(f"window._rmX={target['x']}; window._rmY={target['y']};", 3)
-                    run_xdotool(["xdotool", "mousemove", str(target["x"] * DEVICE_SCALE), str(target["y"] * DEVICE_SCALE)])
-                    log.debug("Left/Right → card at %d,%d", target["x"], target["y"])
+            if target:
+                run_xdotool(["xdotool", "mousemove",
+                              str(target["x"] * DEVICE_SCALE),
+                              str(target["y"] * DEVICE_SCALE)])
+                log.debug("%s → card at css(%d,%d)", key, target["x"], target["y"])
 
     except Exception as e:
         log.debug("CDP navigate failed: %s", e)
