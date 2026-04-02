@@ -188,7 +188,7 @@ async def cdp_navigate(key: str) -> None:
                 row_cards = [c for c in cards if abs(c["y"] - target_row_y) <= ROW_TOLERANCE]
                 target = min(row_cards, key=lambda c: abs(c["x"] - cur_x))
 
-                await eval_js(f"window._rmX={target['x']}; window._rmY={target['y']};", 3)
+                await eval_js(f"window._rmX={target['x']}; window._rmY={target['y']}; window.scrollBy(0, {target['y']} - window.innerHeight/2);", 3)
                 run_xdotool(["xdotool", "mousemove", str(target["x"]), str(target["y"])])
                 log.debug("Up/Down → card at %d,%d", target["x"], target["y"])
 
@@ -215,7 +215,7 @@ async def cdp_navigate(key: str) -> None:
                     target = min(candidates, key=lambda c: c["x"]) if candidates else None
 
                 if target:
-                    await eval_js(f"window._rmX={target['x']}; window._rmY={target['y']};", 3)
+                    await eval_js(f"window._rmX={target['x']}; window._rmY={target['y']}; window.scrollBy(0, {target['y']} - window.innerHeight/2);", 3)
                     run_xdotool(["xdotool", "mousemove", str(target["x"]), str(target["y"])])
                     log.debug("Left/Right → card at %d,%d", target["x"], target["y"])
 
