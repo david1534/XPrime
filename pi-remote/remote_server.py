@@ -213,6 +213,8 @@ async def cdp_navigate(key: str) -> None:
                     target_row_y = min((c["y"] for c in candidates), default=None)
 
                 if target_row_y is None:
+                    scroll_dir = -400 if key == "Up" else 400
+                    await eval_js(f"window.scrollBy(0, {scroll_dir})", 3)
                     return
 
                 row_cards = [c for c in cards if abs(c["y"] - target_row_y) <= ROW_TOLERANCE]
@@ -230,6 +232,46 @@ async def cdp_navigate(key: str) -> None:
                 else:
                     candidates = [c for c in row_cards if c["x"] > cur_x + c["w"] // 3]
                     target = min(candidates, key=lambda c: c["x"]) if candidates else None
+
+                # No more cards in this direction — find and click the row's arrow button
+                if target is None:
+                    arrow_js = """
+(function(curY, direction, rowTol) {
+    var btns = Array.from(document.querySelectorAll('button, [role="button"], a'));
+    var candidates = btns.filter(function(el) {
+        var r = el.getBoundingClientRect();
+        if (r.width < 5 || r.height < 5) return false;
+        if (r.width > 120 || r.height > 120) return false;
+        var elCy = r.top + r.height / 2;
+        if (Math.abs(elCy - curY) > rowTol) return false;
+        var text = (el.textContent || '').trim();
+        var aria = (el.getAttribute('aria-label') || '').toLowerCase();
+        var cls = (el.className || '').toLowerCase();
+        var isArrow = /[›»>❯→▶⟩]/.test(text) || /[‹«<❮←◀⟨]/.test(text) ||
+                      aria.includes('next') || aria.includes('prev') ||
+                      aria.includes('forward') || aria.includes('back') ||
+                      cls.includes('arrow') || cls.includes('chevron') ||
+                      cls.includes('next') || cls.includes('prev') ||
+                      cls.includes('slider') || cls.includes('scroll');
+        if (!isArrow) return false;
+        var cx = r.left + r.width / 2;
+        return direction === 'Right' ? cx > curY : cx < curY;
+    });
+    if (!candidates.length) return null;
+    candidates.sort(function(a, b) {
+        var ar = a.getBoundingClientRect(), br = b.getBoundingClientRect();
+        var ax = ar.left + ar.width / 2, bx = br.left + br.width / 2;
+        return direction === 'Right' ? ax - bx : bx - ax;
+    });
+    var r = candidates[0].getBoundingClientRect();
+    candidates[0].click();
+    return {x: Math.round(r.left + r.width/2), y: Math.round(r.top + r.height/2)};
+})(%d, '%s', %d)
+""" % (cur_y, key, ROW_TOLERANCE * 3)
+                    clicked = await eval_js(arrow_js, 3)
+                    if clicked:
+                        log.debug("%s → clicked row arrow at css(%d,%d)", key, clicked.get("x", 0), clicked.get("y", 0))
+                    return
 
             if target:
                 run_xdotool(["xdotool", "mousemove",
