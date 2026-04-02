@@ -162,22 +162,14 @@ async def cdp_navigate(key: str) -> None:
             async def eval_js(expr, msg_id=1):
                 await cdp.send(json.dumps({"id": msg_id, "method": "Runtime.evaluate",
                                            "params": {"expression": expr, "returnByValue": True}}))
-                for _ in range(10):
-                    r = json.loads(await asyncio.wait_for(cdp.recv(), timeout=2))
-                    if r.get("id") == msg_id:
-                        return r.get("result", {}).get("result", {}).get("value")
-                return None
+                r = json.loads(await asyncio.wait_for(cdp.recv(), timeout=2))
+                return r.get("result", {}).get("result", {}).get("value")
 
             if key in ("Up", "Down"):
-                # Get actual mouse position from xdotool
-                env = os.environ.copy()
-                env["DISPLAY"] = DISPLAY
-                try:
-                    loc = subprocess.check_output(["xdotool", "getmouselocation"], env=env, timeout=3).decode()
-                    cur_x = int(loc.split("x:")[1].split()[0])
-                    cur_y = int(loc.split("y:")[1].split()[0])
-                except Exception:
-                    cur_x, cur_y = 0, 0
+                # Get current tracked mouse position
+                mouse = await eval_js("({x: window._rmX||0, y: window._rmY||0})", 1)
+                cur_x = mouse.get("x", 0) if mouse else 0
+                cur_y = mouse.get("y", 0) if mouse else 0
 
                 cards = await eval_js(GET_ALL_CARDS_JS, 2)
                 if not cards:
@@ -196,43 +188,15 @@ async def cdp_navigate(key: str) -> None:
                 row_cards = [c for c in cards if abs(c["y"] - target_row_y) <= ROW_TOLERANCE]
                 target = min(row_cards, key=lambda c: abs(c["x"] - cur_x))
 
-                # Scroll card into view if near edge, then re-query its position
-                margin = 120
-                if target['y'] < margin or target['y'] > 9999:
-                    scroll_amount = target['y'] - margin
-                else:
-                    scroll_amount = 0
-                # Use document Y to scroll: cardViewportY + scrollY - desired_viewport_Y
-                scroll_js = f"""
-                    var margin = {margin};
-                    var cardY = {target['y']};
-                    var h = window.innerHeight;
-                    if (cardY < margin) window.scrollBy(0, cardY - margin);
-                    else if (cardY > h - margin) window.scrollBy(0, cardY - (h - margin));
-                """
-                await eval_js(scroll_js, 3)
-                await asyncio.sleep(0.1)
-
-                # Re-query cards to get updated viewport positions after scroll
-                cards2 = await eval_js(GET_ALL_CARDS_JS, 4)
-                if cards2:
-                    row_cards2 = [c for c in cards2 if abs(c["x"] - target["x"]) <= 20]
-                    if row_cards2:
-                        target = min(row_cards2, key=lambda c: abs(c["x"] - target["x"]))
-
+                await eval_js(f"window._rmX={target['x']}; window._rmY={target['y']};", 3)
                 run_xdotool(["xdotool", "mousemove", str(target["x"]), str(target["y"])])
                 log.debug("Up/Down → card at %d,%d", target["x"], target["y"])
 
             else:
                 # Left/Right: find nearest card in same row by X position
-                env = os.environ.copy()
-                env["DISPLAY"] = DISPLAY
-                try:
-                    loc = subprocess.check_output(["xdotool", "getmouselocation"], env=env, timeout=3).decode()
-                    cur_x = int(loc.split("x:")[1].split()[0])
-                    cur_y = int(loc.split("y:")[1].split()[0])
-                except Exception:
-                    cur_x, cur_y = 0, 0
+                mouse = await eval_js("({x: window._rmX||0, y: window._rmY||0})", 1)
+                cur_x = mouse.get("x", 0) if mouse else 0
+                cur_y = mouse.get("y", 0) if mouse else 0
 
                 cards = await eval_js(GET_ALL_CARDS_JS, 2)
                 if not cards:
@@ -251,6 +215,7 @@ async def cdp_navigate(key: str) -> None:
                     target = min(candidates, key=lambda c: c["x"]) if candidates else None
 
                 if target:
+                    await eval_js(f"window._rmX={target['x']}; window._rmY={target['y']};", 3)
                     run_xdotool(["xdotool", "mousemove", str(target["x"]), str(target["y"])])
                     log.debug("Left/Right → card at %d,%d", target["x"], target["y"])
 
