@@ -57,7 +57,7 @@ NAV_KEYS = {
 COMMANDS = {
     "select":     ["xdotool", "key", "Return"],
     "back":       ["xdotool", "key", "alt+Left"],
-    "playpause":  ["xdotool", "key", "space"],
+    "playpause":  None,  # handled specially below
     "fullscreen": ["xdotool", "key", "f"],
     "tab":        ["xdotool", "key", "Tab"],
     "escape":     ["xdotool", "key", "Escape"],
@@ -241,14 +241,20 @@ async def handle_action(data: dict) -> None:
     elif action in NAV_KEYS:
         await cdp_navigate(NAV_KEYS[action])
     elif action == "select":
-        ws_url = get_cdp_ws_url()
-        if ws_url:
-            try:
-                await cdp_eval(ws_url, CLICK_PRIMARY_JS)
-                return
-            except Exception as e:
-                log.debug("CDP select failed: %s", e)
-        run_xdotool(["xdotool", "key", "Return"])
+        # Click at current mouse position (navigation is mouse-based)
+        run_xdotool(["xdotool", "click", "1"])
+    elif action == "playpause":
+        # Focus the Chromium window then send space
+        env = os.environ.copy()
+        env["DISPLAY"] = DISPLAY
+        try:
+            win_id = subprocess.check_output(
+                ["xdotool", "search", "--onlyvisible", "--class", "chromium"],
+                env=env, timeout=3).decode().strip().split()[0]
+            run_xdotool(["xdotool", "windowfocus", win_id])
+        except Exception:
+            pass
+        run_xdotool(["xdotool", "key", "space"])
     elif action in COMMANDS:
         run_xdotool(COMMANDS[action])
     else:
