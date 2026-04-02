@@ -134,6 +134,47 @@ async def cdp_eval(cdp_ws_url: str, expression: str) -> object:
         return resp.get("result", {}).get("result", {}).get("value")
 
 
+# --- Persistent CDP connection ---
+_cdp_conn = None
+_cdp_url = None
+_cdp_msg_id = 0
+
+
+async def cdp_send(expression: str):
+    """Send a JS expression over the persistent CDP connection, return value."""
+    global _cdp_conn, _cdp_url, _cdp_msg_id
+    from websockets.asyncio.client import connect as cdp_connect
+
+    # Reconnect if needed
+    ws_url = get_cdp_ws_url()
+    if ws_url != _cdp_url or _cdp_conn is None:
+        if _cdp_conn is not None:
+            try:
+                await _cdp_conn.close()
+            except Exception:
+                pass
+        _cdp_conn = await cdp_connect(ws_url, open_timeout=3)
+        _cdp_url = ws_url
+
+    _cdp_msg_id += 1
+    msg_id = _cdp_msg_id
+    try:
+        await _cdp_conn.send(json.dumps({
+            "id": msg_id, "method": "Runtime.evaluate",
+            "params": {"expression": expression, "returnByValue": True}
+        }))
+        # Drain until we get our response (skip CDP events)
+        for _ in range(10):
+            raw = await asyncio.wait_for(_cdp_conn.recv(), timeout=3)
+            resp = json.loads(raw)
+            if resp.get("id") == msg_id:
+                return resp.get("result", {}).get("result", {}).get("value")
+    except Exception as e:
+        log.debug("CDP send failed, will reconnect next call: %s", e)
+        _cdp_conn = None
+    return None
+
+
 GET_ALL_CARDS_JS = """
 (function() {
     var all = document.querySelectorAll('a, [role="link"], [role="button"], button');
@@ -165,122 +206,110 @@ def get_mouse_css_pos() -> tuple[int, int]:
         return 0, 0
 
 
-FAST_TRANSITIONS_JS = """
-(function() {
-    if (document.getElementById('_rm_fast_tx')) return;
-    var s = document.createElement('style');
-    s.id = '_rm_fast_tx';
-    s.textContent = '* { transition-duration: 80ms !important; transition-delay: 0s !important; animation-duration: 80ms !important; }';
-    document.head.appendChild(s);
-})()
+COMBINED_NAV_JS = """
+(function(key, mouseX, mouseY, cardMin, rowTol) {
+    // Inject fast transitions once
+    if (!document.getElementById('_rm_fast_tx')) {
+        var s = document.createElement('style');
+        s.id = '_rm_fast_tx';
+        s.textContent = '* { transition-duration: 80ms !important; transition-delay: 0s !important; animation-duration: 80ms !important; }';
+        document.head.appendChild(s);
+    }
+
+    var all = document.querySelectorAll('a, [role="link"], [role="button"], button');
+    var cards = [];
+    for (var i = 0; i < all.length; i++) {
+        var r = all[i].getBoundingClientRect();
+        if (r.width >= cardMin && r.height >= cardMin && r.bottom > 0 && r.top < window.innerHeight + 300) {
+            cards.push({x: Math.round(r.left + r.width/2), y: Math.round(r.top + r.height/2),
+                        w: Math.round(r.width), h: Math.round(r.height)});
+        }
+    }
+
+    if (!cards.length) return {action: 'none'};
+
+    if (key === 'Up' || key === 'Down') {
+        var candidates = key === 'Up'
+            ? cards.filter(function(c) { return c.y < mouseY - rowTol; })
+            : cards.filter(function(c) { return c.y > mouseY + rowTol; });
+        if (!candidates.length) {
+            return {action: 'scroll', dy: key === 'Up' ? -400 : 400};
+        }
+        var targetY = key === 'Up'
+            ? Math.max.apply(null, candidates.map(function(c){return c.y;}))
+            : Math.min.apply(null, candidates.map(function(c){return c.y;}));
+        var row = cards.filter(function(c){ return Math.abs(c.y - targetY) <= rowTol; });
+        var t = row.reduce(function(a,b){ return Math.abs(a.x-mouseX) < Math.abs(b.x-mouseX)?a:b; });
+        return {action: 'move', x: t.x, y: t.y};
+    } else {
+        var rowCards = cards.filter(function(c){ return Math.abs(c.y - mouseY) <= rowTol; });
+        if (!rowCards.length) rowCards = cards;
+        var thresh = function(c){ return Math.round(c.w / 3); };
+        var cands = key === 'Left'
+            ? rowCards.filter(function(c){ return c.x < mouseX - thresh(c); })
+            : rowCards.filter(function(c){ return c.x > mouseX + thresh(c); });
+        if (cands.length) {
+            var t = key === 'Left'
+                ? cands.reduce(function(a,b){return a.x>b.x?a:b;})
+                : cands.reduce(function(a,b){return a.x<b.x?a:b;});
+            return {action: 'move', x: t.x, y: t.y};
+        }
+        // No card — try to click row arrow button
+        var btns = Array.from(document.querySelectorAll('button, [role="button"], a'));
+        var arrows = btns.filter(function(el) {
+            var r = el.getBoundingClientRect();
+            if (r.width < 5 || r.height < 5 || r.width > 120 || r.height > 120) return false;
+            if (Math.abs((r.top + r.height/2) - mouseY) > rowTol * 3) return false;
+            var text = (el.textContent||'').trim();
+            var aria = (el.getAttribute('aria-label')||'').toLowerCase();
+            var cls  = (el.className||'').toLowerCase();
+            var isArrow = /[›»>❯→▶⟩]/.test(text)||/[‹«<❮←◀⟨]/.test(text)||
+                          aria.includes('next')||aria.includes('prev')||
+                          cls.includes('arrow')||cls.includes('chevron')||
+                          cls.includes('next')||cls.includes('prev')||
+                          cls.includes('slider');
+            if (!isArrow) return false;
+            var cx = r.left + r.width/2;
+            return key === 'Right' ? cx > mouseX : cx < mouseX;
+        });
+        if (arrows.length) {
+            arrows.sort(function(a,b){
+                var ax=a.getBoundingClientRect().left, bx=b.getBoundingClientRect().left;
+                return key==='Right' ? ax-bx : bx-ax;
+            });
+            arrows[0].click();
+            return {action: 'arrow_clicked'};
+        }
+        return {action: 'none'};
+    }
+})('%s', %d, %d, %d, %d)
 """
 
 
 async def cdp_navigate(key: str) -> None:
-    ROW_TOLERANCE = 40
-    ws_url = get_cdp_ws_url()
+    cur_x, cur_y = get_mouse_css_pos()
+    js = COMBINED_NAV_JS % (key, cur_x, cur_y, CARD_MIN_SIZE, 40)
 
-    if not ws_url:
+    try:
+        result = await cdp_send(js)
+    except Exception as e:
+        log.debug("CDP navigate failed: %s", e)
         run_xdotool(["xdotool", "key", key])
         return
 
-    try:
-        from websockets.asyncio.client import connect as cdp_connect
-        async with cdp_connect(ws_url, open_timeout=2) as cdp:
+    if not result:
+        return
 
-            async def eval_js(expr, msg_id=1):
-                await cdp.send(json.dumps({"id": msg_id, "method": "Runtime.evaluate",
-                                           "params": {"expression": expr, "returnByValue": True}}))
-                r = json.loads(await asyncio.wait_for(cdp.recv(), timeout=2))
-                return r.get("result", {}).get("result", {}).get("value")
-
-            # Inject fast transitions (no-op if already present)
-            await eval_js(FAST_TRANSITIONS_JS, 1)
-
-            # Always use the real mouse position — not JS-tracked state which can drift
-            cur_x, cur_y = get_mouse_css_pos()
-
-            cards = await eval_js(GET_ALL_CARDS_JS, 2)
-            if not cards:
-                return
-
-            if key in ("Up", "Down"):
-                if key == "Up":
-                    candidates = [c for c in cards if c["y"] < cur_y - ROW_TOLERANCE]
-                    target_row_y = max((c["y"] for c in candidates), default=None)
-                else:
-                    candidates = [c for c in cards if c["y"] > cur_y + ROW_TOLERANCE]
-                    target_row_y = min((c["y"] for c in candidates), default=None)
-
-                if target_row_y is None:
-                    scroll_dir = -400 if key == "Up" else 400
-                    await eval_js(f"window.scrollBy(0, {scroll_dir})", 3)
-                    return
-
-                row_cards = [c for c in cards if abs(c["y"] - target_row_y) <= ROW_TOLERANCE]
-                target = min(row_cards, key=lambda c: abs(c["x"] - cur_x))
-
-            else:
-                # Same row = within ROW_TOLERANCE pixels vertically
-                row_cards = [c for c in cards if abs(c["y"] - cur_y) <= ROW_TOLERANCE]
-                if not row_cards:
-                    row_cards = cards  # fallback
-
-                if key == "Left":
-                    candidates = [c for c in row_cards if c["x"] < cur_x - c["w"] // 3]
-                    target = max(candidates, key=lambda c: c["x"]) if candidates else None
-                else:
-                    candidates = [c for c in row_cards if c["x"] > cur_x + c["w"] // 3]
-                    target = min(candidates, key=lambda c: c["x"]) if candidates else None
-
-                # No more cards in this direction — find and click the row's arrow button
-                if target is None:
-                    arrow_js = """
-(function(curY, direction, rowTol) {
-    var btns = Array.from(document.querySelectorAll('button, [role="button"], a'));
-    var candidates = btns.filter(function(el) {
-        var r = el.getBoundingClientRect();
-        if (r.width < 5 || r.height < 5) return false;
-        if (r.width > 120 || r.height > 120) return false;
-        var elCy = r.top + r.height / 2;
-        if (Math.abs(elCy - curY) > rowTol) return false;
-        var text = (el.textContent || '').trim();
-        var aria = (el.getAttribute('aria-label') || '').toLowerCase();
-        var cls = (el.className || '').toLowerCase();
-        var isArrow = /[›»>❯→▶⟩]/.test(text) || /[‹«<❮←◀⟨]/.test(text) ||
-                      aria.includes('next') || aria.includes('prev') ||
-                      aria.includes('forward') || aria.includes('back') ||
-                      cls.includes('arrow') || cls.includes('chevron') ||
-                      cls.includes('next') || cls.includes('prev') ||
-                      cls.includes('slider') || cls.includes('scroll');
-        if (!isArrow) return false;
-        var cx = r.left + r.width / 2;
-        return direction === 'Right' ? cx > curY : cx < curY;
-    });
-    if (!candidates.length) return null;
-    candidates.sort(function(a, b) {
-        var ar = a.getBoundingClientRect(), br = b.getBoundingClientRect();
-        var ax = ar.left + ar.width / 2, bx = br.left + br.width / 2;
-        return direction === 'Right' ? ax - bx : bx - ax;
-    });
-    var r = candidates[0].getBoundingClientRect();
-    candidates[0].click();
-    return {x: Math.round(r.left + r.width/2), y: Math.round(r.top + r.height/2)};
-})(%d, '%s', %d)
-""" % (cur_y, key, ROW_TOLERANCE * 3)
-                    clicked = await eval_js(arrow_js, 3)
-                    if clicked:
-                        log.debug("%s → clicked row arrow at css(%d,%d)", key, clicked.get("x", 0), clicked.get("y", 0))
-                    return
-
-            if target:
-                run_xdotool(["xdotool", "mousemove",
-                              str(target["x"] * DEVICE_SCALE),
-                              str(target["y"] * DEVICE_SCALE)])
-                log.debug("%s → card at css(%d,%d)", key, target["x"], target["y"])
-
-    except Exception as e:
-        log.debug("CDP navigate failed: %s", e)
+    act = result.get("action")
+    if act == "move":
+        run_xdotool(["xdotool", "mousemove",
+                     str(result["x"] * DEVICE_SCALE),
+                     str(result["y"] * DEVICE_SCALE)])
+        log.debug("%s → card at css(%d,%d)", key, result["x"], result["y"])
+    elif act == "scroll":
+        await cdp_send(f"window.scrollBy(0, {result['dy']})")
+    elif act == "arrow_clicked":
+        log.debug("%s → clicked row arrow", key)
 
 
 def focus_chromium() -> None:
@@ -319,13 +348,9 @@ async def handle_action(data: dict) -> None:
         focus_chromium()
         run_xdotool(["xdotool", "key", "space"])
     elif action == "back":
-        ws_url = get_cdp_ws_url()
-        if ws_url:
-            try:
-                await cdp_eval(ws_url, "window.history.back()")
-            except Exception:
-                pass
-        else:
+        try:
+            await cdp_send("window.history.back()")
+        except Exception:
             focus_chromium()
             run_xdotool(["xdotool", "key", "alt+Left"])
     elif action == "type":
