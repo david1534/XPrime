@@ -6,165 +6,289 @@
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="X Remote">
-    <meta name="theme-color" content="#1a1a1a">
+    <meta name="theme-color" content="#0d0d0d">
     <title>X Prime Remote</title>
-    <link rel="manifest" href="data:application/json;base64,eyJuYW1lIjoiWCBQcmltZSBSZW1vdGUiLCJzaG9ydF9uYW1lIjoiWCBSZW1vdGUiLCJzdGFydF91cmwiOiIvIiwiZGlzcGxheSI6InN0YW5kYWxvbmUiLCJiYWNrZ3JvdW5kX2NvbG9yIjoiIzFhMWExYSIsInRoZW1lX2NvbG9yIjoiIzFhMWExYSJ9">
+    <link rel="manifest" href="data:application/json;base64,eyJuYW1lIjoiWCBQcmltZSBSZW1vdGUiLCJzaG9ydF9uYW1lIjoiWCBSZW1vdGUiLCJzdGFydF91cmwiOiIvIiwiZGlzcGxheSI6InN0YW5kYWxvbmUiLCJiYWNrZ3JvdW5kX2NvbG9yIjoiIzBkMGQwZCIsInRoZW1lX2NvbG9yIjoiIzBkMGQwZCJ9">
     <style>
-        * {
+        *, *::before, *::after {
             box-sizing: border-box;
             margin: 0;
             padding: 0;
             -webkit-tap-highlight-color: transparent;
             touch-action: manipulation;
         }
+
         html, body {
             height: 100%;
+            width: 100%;
             overscroll-behavior: none;
             overflow: hidden;
+            background: #0d0d0d;
         }
+
         body {
-            background: #1a1a1a;
-            color: #e0e0e0;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
             display: flex;
             flex-direction: column;
             align-items: center;
-            padding: 12px 16px;
-            padding-top: max(12px, env(safe-area-inset-top));
-            padding-bottom: max(12px, env(safe-area-inset-bottom));
+            padding: env(safe-area-inset-top, 12px) env(safe-area-inset-right, 0) env(safe-area-inset-bottom, 12px) env(safe-area-inset-left, 0);
             user-select: none;
             -webkit-user-select: none;
+            font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", sans-serif;
+            color: #fff;
         }
 
-        /* --- Header --- */
+        /* ── Header ── */
         .header {
             display: flex;
             align-items: center;
             justify-content: center;
             gap: 8px;
-            margin-bottom: 16px;
-            font-size: 16px;
+            padding: 12px 0 8px;
+            font-size: 13px;
             font-weight: 600;
-            letter-spacing: 0.5px;
+            letter-spacing: 1.5px;
+            text-transform: uppercase;
+            color: #666;
         }
         .status-dot {
-            width: 10px;
-            height: 10px;
+            width: 8px;
+            height: 8px;
             border-radius: 50%;
-            background: #f44;
-            transition: background 0.3s;
+            background: #c0392b;
+            transition: background 0.4s;
+            flex-shrink: 0;
         }
-        .status-dot.connected {
-            background: #4c4;
-        }
+        .status-dot.connected { background: #27ae60; }
 
-        /* --- Remote layout --- */
+        /* ── Main layout ── */
         .remote {
+            flex: 1;
             width: 100%;
-            max-width: 380px;
+            max-width: 420px;
             display: flex;
             flex-direction: column;
-            gap: 10px;
-            flex: 1;
-            overflow-y: auto;
-            overflow-x: hidden;
+            align-items: center;
+            gap: 0;
+            padding: 0 20px 8px;
+            overflow: hidden;
         }
 
-        /* --- Buttons --- */
-        button {
-            background: #2a2a2a;
-            color: #e0e0e0;
-            border: 1px solid #3a3a3a;
-            border-radius: 12px;
-            font-size: 16px;
+        /* ── Top row: Back + Fullscreen ── */
+        .top-row {
+            display: flex;
+            width: 100%;
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+        .top-row button {
+            flex: 1;
+            height: 44px;
+            background: #1e1e1e;
+            border: 1px solid #2c2c2c;
+            border-radius: 22px;
+            color: #aaa;
+            font-size: 14px;
             font-weight: 500;
             cursor: pointer;
             display: flex;
             align-items: center;
             justify-content: center;
-            transition: background 0.1s, transform 0.05s;
-            min-height: 52px;
-            touch-action: manipulation;
-        }
-        button:active {
-            background: #444;
-            transform: scale(0.96);
-        }
-
-        /* --- D-pad --- */
-        .dpad {
-            display: grid;
-            grid-template-columns: 1fr 1fr 1fr;
-            grid-template-rows: 1fr 1fr 1fr;
             gap: 6px;
-            aspect-ratio: 3 / 3;
-            max-height: 180px;
+            transition: background 0.1s, transform 0.08s;
         }
-        .dpad button {
+        .top-row button:active {
+            background: #2e2e2e;
+            transform: scale(0.95);
+        }
+
+        /* ── D-pad ── */
+        .dpad-wrap {
+            position: relative;
+            width: min(72vw, 300px);
+            aspect-ratio: 1;
+            margin-bottom: 20px;
+        }
+
+        .dpad-ring {
+            position: absolute;
+            inset: 0;
+            border-radius: 50%;
+            background: #1a1a1a;
+            border: 1px solid #2c2c2c;
+            box-shadow: 0 4px 24px rgba(0,0,0,0.5);
+        }
+
+        .dpad-wrap button {
+            position: absolute;
+            background: transparent;
+            border: none;
+            color: #ccc;
             font-size: 22px;
-            min-height: unset;
-        }
-        .dpad-up    { grid-column: 2; grid-row: 1; border-radius: 12px 12px 4px 4px; }
-        .dpad-left  { grid-column: 1; grid-row: 2; border-radius: 12px 4px 4px 12px; }
-        .dpad-ok    { grid-column: 2; grid-row: 2; background: #3a5a8a; border-color: #4a6a9a; font-size: 18px; font-weight: 700; border-radius: 8px; }
-        .dpad-ok:active { background: #5a7aaa; }
-        .dpad-right { grid-column: 3; grid-row: 2; border-radius: 4px 12px 12px 4px; }
-        .dpad-down  { grid-column: 2; grid-row: 3; border-radius: 4px 4px 12px 12px; }
-
-        /* --- Button rows --- */
-        .row {
-            display: flex;
-            gap: 8px;
-        }
-        .row button {
-            flex: 1;
-        }
-        .row-3 button {
-            font-size: 14px;
-        }
-
-        /* --- Play/Pause --- */
-        .playpause {
-            background: #2a4a2a;
-            border-color: #3a5a3a;
-            font-size: 18px;
-            min-height: 56px;
-        }
-        .playpause:active {
-            background: #4a6a4a;
-        }
-
-        /* --- Touchpad --- */
-        .touchpad-label {
-            font-size: 12px;
-            color: #888;
-            text-align: center;
-            margin-top: 4px;
-        }
-        .touchpad {
-            width: 100%;
-            height: 120px;
-            background: #222;
-            border: 1px solid #3a3a3a;
-            border-radius: 12px;
+            cursor: pointer;
             display: flex;
             align-items: center;
             justify-content: center;
-            color: #555;
-            font-size: 14px;
+            transition: color 0.1s, transform 0.08s;
+            border-radius: 0;
+        }
+        .dpad-wrap button:active {
+            color: #fff;
+            transform: scale(0.88);
+        }
+
+        .dpad-up    { top: 0;   left: 50%; transform: translateX(-50%); width: 33.3%; height: 33.3%; }
+        .dpad-down  { bottom: 0; left: 50%; transform: translateX(-50%); width: 33.3%; height: 33.3%; }
+        .dpad-left  { left: 0;  top: 50%; transform: translateY(-50%); width: 33.3%; height: 33.3%; }
+        .dpad-right { right: 0; top: 50%; transform: translateY(-50%); width: 33.3%; height: 33.3%; }
+
+        .dpad-up:active    { transform: translateX(-50%) scale(0.88); }
+        .dpad-down:active  { transform: translateX(-50%) scale(0.88); }
+        .dpad-left:active  { transform: translateY(-50%) scale(0.88); }
+        .dpad-right:active { transform: translateY(-50%) scale(0.88); }
+
+        .dpad-ok {
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            width: 36%; height: 36%;
+            background: #1e3a6e !important;
+            border: 1px solid #2a5298 !important;
+            border-radius: 50% !important;
+            font-size: 16px !important;
+            font-weight: 700 !important;
+            color: #fff !important;
+            box-shadow: 0 0 0 3px #0d0d0d;
+        }
+        .dpad-ok:active {
+            background: #2a5298 !important;
+            transform: translate(-50%, -50%) scale(0.92) !important;
+        }
+
+        /* Cross lines on d-pad */
+        .dpad-ring::before,
+        .dpad-ring::after {
+            content: '';
+            position: absolute;
+            background: #2c2c2c;
+        }
+        .dpad-ring::before {
+            width: 1px; height: 100%;
+            left: 50%; transform: translateX(-50%);
+        }
+        .dpad-ring::after {
+            height: 1px; width: 100%;
+            top: 50%; transform: translateY(-50%);
+        }
+
+        /* ── Play/Pause ── */
+        .playpause {
+            width: 100%;
+            height: 56px;
+            background: #1a2e1a;
+            border: 1px solid #2a4a2a;
+            border-radius: 28px;
+            color: #5cdb5c;
+            font-size: 22px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            font-weight: 600;
+            margin-bottom: 12px;
+            transition: background 0.1s, transform 0.08s;
+        }
+        .playpause span { font-size: 14px; color: #aaa; font-weight: 500; }
+        .playpause:active {
+            background: #2a4a2a;
+            transform: scale(0.97);
+        }
+
+        /* ── Middle row: Scroll ── */
+        .mid-row {
+            display: flex;
+            width: 100%;
+            gap: 12px;
+            margin-bottom: 12px;
+        }
+        .mid-row button {
+            flex: 1;
+            height: 50px;
+            background: #1e1e1e;
+            border: 1px solid #2c2c2c;
+            border-radius: 14px;
+            color: #ccc;
+            font-size: 20px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: background 0.1s, transform 0.08s;
+        }
+        .mid-row button:active {
+            background: #2e2e2e;
+            transform: scale(0.95);
+        }
+
+        /* ── Utility row ── */
+        .util-row {
+            display: flex;
+            width: 100%;
+            gap: 10px;
+            margin-bottom: 12px;
+        }
+        .util-row button {
+            flex: 1;
+            height: 40px;
+            background: #161616;
+            border: 1px solid #252525;
+            border-radius: 10px;
+            color: #777;
+            font-size: 12px;
+            font-weight: 500;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            letter-spacing: 0.5px;
+            transition: background 0.1s, transform 0.08s;
+        }
+        .util-row button:active {
+            background: #252525;
+            transform: scale(0.95);
+            color: #aaa;
+        }
+
+        /* ── Touchpad ── */
+        .touchpad-label {
+            font-size: 11px;
+            color: #444;
+            text-align: center;
+            margin-bottom: 6px;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+        }
+        .touchpad {
+            width: 100%;
+            flex: 1;
+            min-height: 80px;
+            max-height: 120px;
+            background: #141414;
+            border: 1px solid #252525;
+            border-radius: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #333;
+            font-size: 24px;
             position: relative;
             overflow: hidden;
         }
-        .touchpad::after {
-            content: "";
+        .touchpad::before {
+            content: '';
             position: absolute;
-            top: 50%;
-            left: 50%;
-            width: 30px;
-            height: 30px;
-            transform: translate(-50%, -50%);
-            border: 1px solid #3a3a3a;
-            border-radius: 50%;
+            inset: 0;
+            border-radius: 16px;
+            background: radial-gradient(ellipse at center, #1a1a1a 0%, transparent 70%);
             pointer-events: none;
         }
     </style>
@@ -172,12 +296,21 @@
 <body>
     <div class="header">
         <div class="status-dot" id="statusDot"></div>
-        <span>X Prime Remote</span>
+        <span>X Prime</span>
     </div>
 
     <div class="remote">
+
+        <!-- Back + Fullscreen -->
+        <div class="top-row">
+            <button data-action="back">&#8592; Back</button>
+            <button data-action="escape">✕ Close</button>
+            <button data-action="fullscreen">&#9974; Full</button>
+        </div>
+
         <!-- D-pad -->
-        <div class="dpad">
+        <div class="dpad-wrap">
+            <div class="dpad-ring"></div>
             <button class="dpad-up"    data-action="up">&#9650;</button>
             <button class="dpad-left"  data-action="left">&#9664;</button>
             <button class="dpad-ok"    data-action="select">OK</button>
@@ -185,129 +318,87 @@
             <button class="dpad-down"  data-action="down">&#9660;</button>
         </div>
 
-        <!-- Play/Pause -->
-        <button class="playpause" data-action="playpause">&#9199;  Play / Pause</button>
-
-        <!-- Back + Fullscreen -->
-        <div class="row">
-            <button data-action="back">&#8592; Back</button>
-            <button data-action="fullscreen">&#9974; Fullscreen</button>
-        </div>
+        <!-- Play / Pause -->
+        <button class="playpause" data-action="playpause">
+            &#9199; <span>Play / Pause</span>
+        </button>
 
         <!-- Scroll -->
-        <div class="row">
-            <button data-action="scroll_up">&#8593; Scroll Up</button>
-            <button data-action="scroll_down">&#8595; Scroll Down</button>
+        <div class="mid-row">
+            <button data-action="scroll_up">&#8679;</button>
+            <button data-action="scroll_down">&#8681;</button>
         </div>
 
         <!-- Utility -->
-        <div class="row row-3">
-            <button data-action="tab">Tab</button>
-            <button data-action="escape">Esc</button>
-            <button data-action="reload">Reload</button>
+        <div class="util-row">
+            <button data-action="tab">TAB</button>
+            <button data-action="reload">RELOAD</button>
         </div>
 
-        <!-- Mouse touchpad -->
-        <div class="touchpad-label">Mouse Touchpad — drag to move, tap to click</div>
-        <div class="touchpad" id="touchpad">
-            <span>&#8982;</span>
-        </div>
+        <!-- Touchpad -->
+        <div class="touchpad-label">Touchpad · drag to move · tap to click</div>
+        <div class="touchpad" id="touchpad">&#8982;</div>
+
     </div>
 
     <script>
-        // --- WebSocket ---
         const statusDot = document.getElementById("statusDot");
-        let ws = null;
-        let reconnectTimer = null;
+        let ws = null, reconnectTimer = null;
 
         function connect() {
             const proto = location.protocol === "https:" ? "wss:" : "ws:";
             ws = new WebSocket(`${proto}//${location.host}/ws`);
-
             ws.onopen = () => {
                 statusDot.classList.add("connected");
-                if (reconnectTimer) {
-                    clearTimeout(reconnectTimer);
-                    reconnectTimer = null;
-                }
+                clearTimeout(reconnectTimer);
+                reconnectTimer = null;
             };
-
             ws.onclose = () => {
                 statusDot.classList.remove("connected");
-                scheduleReconnect();
+                if (!reconnectTimer) reconnectTimer = setTimeout(() => { reconnectTimer = null; connect(); }, 2000);
             };
-
-            ws.onerror = () => {
-                ws.close();
-            };
-        }
-
-        function scheduleReconnect() {
-            if (!reconnectTimer) {
-                reconnectTimer = setTimeout(() => {
-                    reconnectTimer = null;
-                    connect();
-                }, 2000);
-            }
+            ws.onerror = () => ws.close();
         }
 
         function send(data) {
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify(data));
-                // Haptic feedback
-                if (navigator.vibrate) navigator.vibrate(10);
+                if (navigator.vibrate) navigator.vibrate(8);
             }
         }
 
-        // --- Button handlers ---
         document.querySelectorAll("[data-action]").forEach(btn => {
-            btn.addEventListener("pointerdown", (e) => {
-                e.preventDefault();
-                send({ action: btn.dataset.action });
-            });
+            btn.addEventListener("pointerdown", e => { e.preventDefault(); send({ action: btn.dataset.action }); });
         });
 
-        // --- Touchpad ---
+        // Touchpad
         const touchpad = document.getElementById("touchpad");
-        let touchStartX = 0, touchStartY = 0;
-        let touchMoved = false;
-        const MOVE_THRESHOLD = 3;
-        const SENSITIVITY = 1.5;
+        let tx = 0, ty = 0, moved = false;
 
-        touchpad.addEventListener("touchstart", (e) => {
+        touchpad.addEventListener("touchstart", e => {
             e.preventDefault();
-            const t = e.touches[0];
-            touchStartX = t.clientX;
-            touchStartY = t.clientY;
-            touchMoved = false;
+            tx = e.touches[0].clientX;
+            ty = e.touches[0].clientY;
+            moved = false;
         }, { passive: false });
 
-        touchpad.addEventListener("touchmove", (e) => {
+        touchpad.addEventListener("touchmove", e => {
             e.preventDefault();
-            const t = e.touches[0];
-            const dx = t.clientX - touchStartX;
-            const dy = t.clientY - touchStartY;
-            if (Math.abs(dx) > MOVE_THRESHOLD || Math.abs(dy) > MOVE_THRESHOLD) {
-                touchMoved = true;
-                send({
-                    action: "mouse_move",
-                    dx: Math.round(dx * SENSITIVITY),
-                    dy: Math.round(dy * SENSITIVITY),
-                });
-                touchStartX = t.clientX;
-                touchStartY = t.clientY;
+            const dx = e.touches[0].clientX - tx;
+            const dy = e.touches[0].clientY - ty;
+            if (Math.abs(dx) > 2 || Math.abs(dy) > 2) {
+                moved = true;
+                send({ action: "mouse_move", dx: Math.round(dx * 1.5), dy: Math.round(dy * 1.5) });
+                tx = e.touches[0].clientX;
+                ty = e.touches[0].clientY;
             }
         }, { passive: false });
 
-        touchpad.addEventListener("touchend", (e) => {
+        touchpad.addEventListener("touchend", e => {
             e.preventDefault();
-            if (!touchMoved) {
-                send({ action: "mouse_click" });
-                if (navigator.vibrate) navigator.vibrate(10);
-            }
+            if (!moved) send({ action: "mouse_click" });
         }, { passive: false });
 
-        // --- Init ---
         connect();
     </script>
 </body>
