@@ -279,27 +279,29 @@ async def handle_action(data: dict) -> None:
             run_xdotool(["xdotool", "type", "--clearmodifiers", "--", text])
     elif action == "restart_browser":
         log.info("Restarting Chromium...")
-        env = os.environ.copy()
-        env["DISPLAY"] = DISPLAY
-        subprocess.run(["pkill", "-u", "david1534", "chromium"], env=env, timeout=5)
+        subprocess.run(["pkill", "-u", "david1534", "chromium"],
+                       capture_output=True, timeout=5)
         import time; time.sleep(3)
+        chromium_cmd = (
+            "DISPLAY=:0 XAUTHORITY=/home/david1534/.Xauthority "
+            "HOME=/home/david1534 "
+            "/usr/bin/chromium "
+            "--kiosk --noerrdialogs --disable-infobars "
+            "--disable-session-crashed-bubble --disable-translate "
+            "--no-first-run --fast --fast-start "
+            "--disable-features=TranslateUI --disable-pinch "
+            "--overscroll-history-navigation=0 --start-fullscreen "
+            "--enable-features=VaapiVideoDecoder "
+            "--check-for-update-interval=31536000 "
+            "--password-store=basic "
+            "--load-extension=/home/david1534/extensions/ublock/uBlock0.chromium "
+            "--enable-spatial-navigation "
+            f"--remote-debugging-port={CDP_PORT} "
+            f"--force-device-scale-factor={DEVICE_SCALE} "
+            "https://xprime.tv"
+        )
         subprocess.Popen(
-            ["/usr/bin/chromium",
-             "--kiosk", "--noerrdialogs", "--disable-infobars",
-             "--disable-session-crashed-bubble", "--disable-translate",
-             "--no-first-run", "--fast", "--fast-start",
-             "--disable-features=TranslateUI", "--disable-pinch",
-             "--overscroll-history-navigation=0", "--start-fullscreen",
-             "--enable-features=VaapiVideoDecoder",
-             "--check-for-update-interval=31536000",
-             "--password-store=basic",
-             f"--load-extension=/home/david1534/extensions/ublock/uBlock0.chromium",
-             "--enable-spatial-navigation",
-             f"--remote-debugging-port={CDP_PORT}",
-             f"--force-device-scale-factor={DEVICE_SCALE}",
-             "https://xprime.tv"],
-            env={**env, "XAUTHORITY": "/home/david1534/.Xauthority"},
-            user="david1534",
+            ["sudo", "-u", "david1534", "bash", "-c", chromium_cmd],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
     elif action in COMMANDS:
