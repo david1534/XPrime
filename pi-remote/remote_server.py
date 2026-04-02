@@ -130,31 +130,84 @@ async def cdp_eval(cdp_ws_url: str, expression: str) -> object:
         return resp.get("result", {}).get("result", {}).get("value")
 
 
+GET_ALL_CARDS_JS = """
+(function() {
+    var all = document.querySelectorAll('a, [role="link"], [role="button"], button');
+    var cards = [];
+    for (var i = 0; i < all.length; i++) {
+        var r = all[i].getBoundingClientRect();
+        if (r.width >= %d && r.height >= %d && r.bottom > 0 && r.top < window.innerHeight + 300) {
+            cards.push({x: Math.round(r.left + r.width/2), y: Math.round(r.top + r.height/2),
+                        w: Math.round(r.width), h: Math.round(r.height)});
+        }
+    }
+    return cards;
+})()
+""" % (CARD_MIN_SIZE, CARD_MIN_SIZE)
+
+
 async def cdp_navigate(key: str) -> None:
     MAX_SKIPS = 8
+    ROW_TOLERANCE = 40
     ws_url = get_cdp_ws_url()
-    run_xdotool(["xdotool", "key", key])
+
     if not ws_url:
+        run_xdotool(["xdotool", "key", key])
         return
+
     try:
         from websockets.asyncio.client import connect as cdp_connect
         async with cdp_connect(ws_url, open_timeout=2) as cdp:
-            for attempt in range(MAX_SKIPS):
-                await asyncio.sleep(0.08)
-                await cdp.send(json.dumps({
-                    "id": attempt + 1, "method": "Runtime.evaluate",
-                    "params": {"expression": FOCUSED_ELEMENT_JS, "returnByValue": True}
-                }))
-                resp = json.loads(await asyncio.wait_for(cdp.recv(), timeout=2))
-                pos = resp.get("result", {}).get("result", {}).get("value")
-                if not pos:
-                    break
-                w, h = pos.get("w", 0), pos.get("h", 0)
-                if w >= CARD_MIN_SIZE and h >= CARD_MIN_SIZE:
-                    run_xdotool(["xdotool", "mousemove", str(pos["x"]), str(pos["y"])])
-                    break
+
+            async def eval_js(expr, msg_id=1):
+                await cdp.send(json.dumps({"id": msg_id, "method": "Runtime.evaluate",
+                                           "params": {"expression": expr, "returnByValue": True}}))
+                r = json.loads(await asyncio.wait_for(cdp.recv(), timeout=2))
+                return r.get("result", {}).get("result", {}).get("value")
+
+            if key in ("Up", "Down"):
+                # Get current tracked mouse position
+                mouse = await eval_js("({x: window._rmX||0, y: window._rmY||0})", 1)
+                cur_x = mouse.get("x", 0) if mouse else 0
+                cur_y = mouse.get("y", 0) if mouse else 0
+
+                cards = await eval_js(GET_ALL_CARDS_JS, 2)
+                if not cards:
+                    return
+
+                if key == "Up":
+                    candidates = [c for c in cards if c["y"] < cur_y - ROW_TOLERANCE]
+                    target_row_y = max((c["y"] for c in candidates), default=None)
                 else:
-                    run_xdotool(["xdotool", "key", key])
+                    candidates = [c for c in cards if c["y"] > cur_y + ROW_TOLERANCE]
+                    target_row_y = min((c["y"] for c in candidates), default=None)
+
+                if target_row_y is None:
+                    return
+
+                row_cards = [c for c in cards if abs(c["y"] - target_row_y) <= ROW_TOLERANCE]
+                target = min(row_cards, key=lambda c: abs(c["x"] - cur_x))
+
+                await eval_js(f"window._rmX={target['x']}; window._rmY={target['y']};", 3)
+                run_xdotool(["xdotool", "mousemove", str(target["x"]), str(target["y"])])
+                log.debug("Up/Down → card at %d,%d", target["x"], target["y"])
+
+            else:
+                # Left/Right: spatial nav, skip sub-buttons
+                run_xdotool(["xdotool", "key", key])
+                for attempt in range(MAX_SKIPS):
+                    await asyncio.sleep(0.08)
+                    pos = await eval_js(FOCUSED_ELEMENT_JS, attempt + 1)
+                    if not pos:
+                        break
+                    w, h = pos.get("w", 0), pos.get("h", 0)
+                    if w >= CARD_MIN_SIZE and h >= CARD_MIN_SIZE:
+                        run_xdotool(["xdotool", "mousemove", str(pos["x"]), str(pos["y"])])
+                        await eval_js(f"window._rmX={pos['x']}; window._rmY={pos['y']};", 99)
+                        break
+                    else:
+                        run_xdotool(["xdotool", "key", key])
+
     except Exception as e:
         log.debug("CDP navigate failed: %s", e)
 
