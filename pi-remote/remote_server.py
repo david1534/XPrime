@@ -188,16 +188,35 @@ async def cdp_navigate(key: str) -> None:
                 row_cards = [c for c in cards if abs(c["y"] - target_row_y) <= ROW_TOLERANCE]
                 target = min(row_cards, key=lambda c: abs(c["x"] - cur_x))
 
-                # Scroll only if the row is near the edge of the viewport
+                # Scroll card into view if near edge, then re-query its position
+                margin = 120
+                if target['y'] < margin or target['y'] > 9999:
+                    scroll_amount = target['y'] - margin
+                else:
+                    scroll_amount = 0
+                # Use document Y to scroll: cardViewportY + scrollY - desired_viewport_Y
                 scroll_js = f"""
+                    var margin = {margin};
                     var cardY = {target['y']};
-                    var margin = 80;
-                    if (cardY < margin) window.scrollBy({{top: cardY - margin, behavior: 'smooth'}});
-                    else if (cardY > window.innerHeight - margin) window.scrollBy({{top: cardY - (window.innerHeight - margin), behavior: 'smooth'}});
-                    window._rmX={target['x']}; window._rmY={target['y']};
+                    var h = window.innerHeight;
+                    if (cardY < margin) {{
+                        window.scrollBy(0, cardY - margin);
+                    }} else if (cardY > h - margin) {{
+                        window.scrollBy(0, cardY - (h - margin));
+                    }}
+                    window._rmX={target['x']};
                 """
                 await eval_js(scroll_js, 3)
-                await asyncio.sleep(0.15)
+                await asyncio.sleep(0.1)
+
+                # Re-query cards to get updated viewport positions after scroll
+                cards2 = await eval_js(GET_ALL_CARDS_JS, 4)
+                if cards2:
+                    row_cards2 = [c for c in cards2 if abs(c["x"] - target["x"]) <= 20]
+                    if row_cards2:
+                        target = min(row_cards2, key=lambda c: abs(c["x"] - target["x"]))
+
+                await eval_js(f"window._rmX={target['x']}; window._rmY={target['y']};", 5)
                 run_xdotool(["xdotool", "mousemove", str(target["x"]), str(target["y"])])
                 log.debug("Up/Down → card at %d,%d", target["x"], target["y"])
 
