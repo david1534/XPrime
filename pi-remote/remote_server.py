@@ -162,8 +162,11 @@ async def cdp_navigate(key: str) -> None:
             async def eval_js(expr, msg_id=1):
                 await cdp.send(json.dumps({"id": msg_id, "method": "Runtime.evaluate",
                                            "params": {"expression": expr, "returnByValue": True}}))
-                r = json.loads(await asyncio.wait_for(cdp.recv(), timeout=2))
-                return r.get("result", {}).get("result", {}).get("value")
+                for _ in range(10):
+                    r = json.loads(await asyncio.wait_for(cdp.recv(), timeout=2))
+                    if r.get("id") == msg_id:
+                        return r.get("result", {}).get("result", {}).get("value")
+                return None
 
             if key in ("Up", "Down"):
                 # Get current tracked mouse position
