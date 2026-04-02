@@ -263,8 +263,15 @@ async def handle_action(data: dict) -> None:
         focus_chromium()
         run_xdotool(["xdotool", "key", "space"])
     elif action == "back":
-        focus_chromium()
-        run_xdotool(["xdotool", "key", "alt+Left"])
+        ws_url = get_cdp_ws_url()
+        if ws_url:
+            try:
+                await cdp_eval(ws_url, "window.history.back()")
+            except Exception:
+                pass
+        else:
+            focus_chromium()
+            run_xdotool(["xdotool", "key", "alt+Left"])
     elif action == "type":
         text = data.get("text", "")
         if text:
