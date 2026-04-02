@@ -12,11 +12,13 @@ import logging
 import os
 import subprocess
 import sys
+import urllib.request
 from pathlib import Path
 
 try:
     import websockets
     from websockets.server import serve
+    from websockets.client import connect as ws_connect
 except ImportError:
     print("Error: 'websockets' package not found. Install with:")
     print("  sudo apt install python3-websockets")
@@ -26,6 +28,7 @@ except ImportError:
 # --- Configuration ---
 HOST = "0.0.0.0"
 PORT = 8080
+CDP_PORT = 9222
 DISPLAY = os.environ.get("DISPLAY", ":0")
 REMOTE_HTML = Path(__file__).parent / "remote.html"
 LOG_FILE = Path(__file__).parent / "remote_server.log"
@@ -41,12 +44,15 @@ logging.basicConfig(
 )
 log = logging.getLogger("pi-remote")
 
-# --- Command mapping ---
+# --- Navigation key mapping ---
+NAV_KEYS = {
+    "up":    "Up",
+    "down":  "Down",
+    "left":  "Left",
+    "right": "Right",
+}
+
 COMMANDS = {
-    "up":         ["xdotool", "key", "shift+Tab"],
-    "down":       ["xdotool", "key", "Tab"],
-    "left":       ["xdotool", "key", "shift+Tab"],
-    "right":      ["xdotool", "key", "Tab"],
     "select":     ["xdotool", "key", "Return"],
     "back":       ["xdotool", "key", "alt+Left"],
     "playpause":  ["xdotool", "key", "space"],
@@ -57,7 +63,7 @@ COMMANDS = {
     "mouse_click":["xdotool", "click", "1"],
 }
 
-SCROLL_REPEAT = 3  # number of scroll ticks per button press
+SCROLL_REPEAT = 3
 
 
 def run_xdotool(cmd: list[str]) -> None:
@@ -73,7 +79,56 @@ def run_xdotool(cmd: list[str]) -> None:
         log.error("xdotool not found. Install with: sudo apt install xdotool")
 
 
-def handle_action(data: dict) -> None:
+def get_cdp_ws_url() -> str | None:
+    """Get the Chrome DevTools Protocol WebSocket URL for the active page."""
+    try:
+        with urllib.request.urlopen(f"http://localhost:{CDP_PORT}/json", timeout=2) as r:
+            tabs = json.loads(r.read())
+        for tab in tabs:
+            if tab.get("type") == "page":
+                return tab.get("webSocketDebuggerUrl")
+    except Exception:
+        pass
+    return None
+
+
+async def move_mouse_to_focused_element() -> None:
+    """Use CDP to find the focused element and move the mouse cursor to it."""
+    ws_url = get_cdp_ws_url()
+    if not ws_url:
+        return
+    try:
+        async with ws_connect(ws_url, open_timeout=2) as cdp:
+            # Get bounding box of the focused element
+            msg_id = 1
+            await cdp.send(json.dumps({
+                "id": msg_id,
+                "method": "Runtime.evaluate",
+                "params": {
+                    "expression": """
+                        (function() {
+                            var el = document.activeElement;
+                            if (!el || el === document.body) return null;
+                            var r = el.getBoundingClientRect();
+                            return {
+                                x: Math.round(r.left + r.width / 2),
+                                y: Math.round(r.top + r.height / 2)
+                            };
+                        })()
+                    """,
+                    "returnByValue": True,
+                }
+            }))
+            response = json.loads(await asyncio.wait_for(cdp.recv(), timeout=2))
+            result = response.get("result", {}).get("result", {})
+            pos = result.get("value")
+            if pos and pos.get("x") and pos.get("y"):
+                run_xdotool(["xdotool", "mousemove", str(pos["x"]), str(pos["y"])])
+    except Exception as e:
+        log.debug("CDP mouse move failed: %s", e)
+
+
+async def handle_action_async(data: dict) -> None:
     """Dispatch a single action from the remote."""
     action = data.get("action")
     if not action:
@@ -89,6 +144,10 @@ def handle_action(data: dict) -> None:
         dx = int(data.get("dx", 0))
         dy = int(data.get("dy", 0))
         run_xdotool(["xdotool", "mousemove_relative", "--", str(dx), str(dy)])
+    elif action in NAV_KEYS:
+        run_xdotool(["xdotool", "key", NAV_KEYS[action]])
+        await asyncio.sleep(0.1)
+        await move_mouse_to_focused_element()
     elif action in COMMANDS:
         run_xdotool(COMMANDS[action])
     else:
@@ -129,7 +188,7 @@ async def ws_handler(websocket):
                 data = json.loads(message)
                 action = data.get("action", "?")
                 log.info("Action from %s: %s", remote[0], action)
-                handle_action(data)
+                await handle_action_async(data)
             except json.JSONDecodeError:
                 log.warning("Invalid JSON from %s: %s", remote[0], message)
     except websockets.ConnectionClosed:
