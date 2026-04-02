@@ -37,6 +37,10 @@ LOG_FILE = Path(__file__).parent / "remote_server.log"
 # Elements smaller than this are sub-buttons, not movie cards
 CARD_MIN_SIZE = 80
 
+# Must match --force-device-scale-factor in kiosk launch command.
+# CDP returns CSS pixels; xdotool needs physical X11 pixels.
+DEVICE_SCALE = 3
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -189,7 +193,7 @@ async def cdp_navigate(key: str) -> None:
                 target = min(row_cards, key=lambda c: abs(c["x"] - cur_x))
 
                 await eval_js(f"window._rmX={target['x']}; window._rmY={target['y']};", 3)
-                run_xdotool(["xdotool", "mousemove", str(target["x"]), str(target["y"])])
+                run_xdotool(["xdotool", "mousemove", str(target["x"] * DEVICE_SCALE), str(target["y"] * DEVICE_SCALE)])
                 log.debug("Up/Down → card at %d,%d", target["x"], target["y"])
 
             else:
@@ -216,7 +220,7 @@ async def cdp_navigate(key: str) -> None:
 
                 if target:
                     await eval_js(f"window._rmX={target['x']}; window._rmY={target['y']};", 3)
-                    run_xdotool(["xdotool", "mousemove", str(target["x"]), str(target["y"])])
+                    run_xdotool(["xdotool", "mousemove", str(target["x"] * DEVICE_SCALE), str(target["y"] * DEVICE_SCALE)])
                     log.debug("Left/Right → card at %d,%d", target["x"], target["y"])
 
     except Exception as e:
