@@ -193,20 +193,31 @@ async def cdp_navigate(key: str) -> None:
                 log.debug("Up/Down → card at %d,%d", target["x"], target["y"])
 
             else:
-                # Left/Right: spatial nav, skip sub-buttons
-                run_xdotool(["xdotool", "key", key])
-                for attempt in range(MAX_SKIPS):
-                    await asyncio.sleep(0.08)
-                    pos = await eval_js(FOCUSED_ELEMENT_JS, attempt + 1)
-                    if not pos:
-                        break
-                    w, h = pos.get("w", 0), pos.get("h", 0)
-                    if w >= CARD_MIN_SIZE and h >= CARD_MIN_SIZE:
-                        run_xdotool(["xdotool", "mousemove", str(pos["x"]), str(pos["y"])])
-                        await eval_js(f"window._rmX={pos['x']}; window._rmY={pos['y']};", 99)
-                        break
-                    else:
-                        run_xdotool(["xdotool", "key", key])
+                # Left/Right: find nearest card in same row by X position
+                mouse = await eval_js("({x: window._rmX||0, y: window._rmY||0})", 1)
+                cur_x = mouse.get("x", 0) if mouse else 0
+                cur_y = mouse.get("y", 0) if mouse else 0
+
+                cards = await eval_js(GET_ALL_CARDS_JS, 2)
+                if not cards:
+                    return
+
+                # Same row = within ROW_TOLERANCE pixels vertically
+                row_cards = [c for c in cards if abs(c["y"] - cur_y) <= ROW_TOLERANCE]
+                if not row_cards:
+                    row_cards = cards  # fallback
+
+                if key == "Left":
+                    candidates = [c for c in row_cards if c["x"] < cur_x - 10]
+                    target = max(candidates, key=lambda c: c["x"]) if candidates else None
+                else:
+                    candidates = [c for c in row_cards if c["x"] > cur_x + 10]
+                    target = min(candidates, key=lambda c: c["x"]) if candidates else None
+
+                if target:
+                    await eval_js(f"window._rmX={target['x']}; window._rmY={target['y']};", 3)
+                    run_xdotool(["xdotool", "mousemove", str(target["x"]), str(target["y"])])
+                    log.debug("Left/Right → card at %d,%d", target["x"], target["y"])
 
     except Exception as e:
         log.debug("CDP navigate failed: %s", e)
