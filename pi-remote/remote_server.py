@@ -175,141 +175,133 @@ async def cdp_send(expression: str):
     return None
 
 
-GET_ALL_CARDS_JS = """
-(function() {
-    var all = document.querySelectorAll('a, [role="link"], [role="button"], button');
-    var cards = [];
-    for (var i = 0; i < all.length; i++) {
-        var r = all[i].getBoundingClientRect();
-        if (r.width >= %d && r.height >= %d && r.bottom > 0 && r.top < window.innerHeight + 300) {
-            cards.push({x: Math.round(r.left + r.width/2), y: Math.round(r.top + r.height/2),
-                        w: Math.round(r.width), h: Math.round(r.height)});
-        }
-    }
-    return cards;
-})()
-""" % (CARD_MIN_SIZE, CARD_MIN_SIZE)
+# --- Mouse position tracked in Python (avoids xdotool subprocess per press) ---
+_mouse_css = [0, 0]  # [x, y] in CSS pixels
 
 
-def get_mouse_css_pos() -> tuple[int, int]:
-    """Get the real current mouse position in CSS pixels (physical ÷ DEVICE_SCALE)."""
-    env = os.environ.copy()
-    env["DISPLAY"] = DISPLAY
-    try:
-        out = subprocess.check_output(
-            ["xdotool", "getmouselocation", "--shell"], env=env, timeout=2
-        ).decode()
-        x = int(next(l for l in out.splitlines() if l.startswith("X=")).split("=")[1])
-        y = int(next(l for l in out.splitlines() if l.startswith("Y=")).split("=")[1])
-        return x // DEVICE_SCALE, y // DEVICE_SCALE
-    except Exception:
-        return 0, 0
+def update_mouse(x: int, y: int) -> None:
+    _mouse_css[0] = x
+    _mouse_css[1] = y
 
 
-COMBINED_NAV_JS = """
-(function(key, mouseX, mouseY, cardMin, rowTol) {
-    // Inject fast transitions once
+# --- Card position cache (avoids re-querying DOM on every press) ---
+import time as _time
+_cards_cache: list | None = None
+_cards_time: float = 0.0
+CARDS_TTL = 0.35  # seconds
+
+
+GET_CARDS_JS = """
+(function(cardMin) {
     if (!document.getElementById('_rm_fast_tx')) {
         var s = document.createElement('style');
         s.id = '_rm_fast_tx';
         s.textContent = '* { transition-duration: 80ms !important; transition-delay: 0s !important; animation-duration: 80ms !important; }';
         document.head.appendChild(s);
     }
-
     var all = document.querySelectorAll('a, [role="link"], [role="button"], button');
     var cards = [];
     for (var i = 0; i < all.length; i++) {
         var r = all[i].getBoundingClientRect();
-        if (r.width >= cardMin && r.height >= cardMin && r.bottom > 0 && r.top < window.innerHeight + 300) {
-            cards.push({x: Math.round(r.left + r.width/2), y: Math.round(r.top + r.height/2),
+        if (r.width >= cardMin && r.height >= cardMin && r.bottom > 0 && r.top < window.innerHeight + 300)
+            cards.push({x: Math.round(r.left+r.width/2), y: Math.round(r.top+r.height/2),
                         w: Math.round(r.width), h: Math.round(r.height)});
-        }
     }
+    return cards;
+})(%d)
+""" % CARD_MIN_SIZE
 
-    if (!cards.length) return {action: 'none'};
-
-    if (key === 'Up' || key === 'Down') {
-        var candidates = key === 'Up'
-            ? cards.filter(function(c) { return c.y < mouseY - rowTol; })
-            : cards.filter(function(c) { return c.y > mouseY + rowTol; });
-        if (!candidates.length) {
-            return {action: 'scroll', dy: key === 'Up' ? -400 : 400};
-        }
-        var targetY = key === 'Up'
-            ? Math.max.apply(null, candidates.map(function(c){return c.y;}))
-            : Math.min.apply(null, candidates.map(function(c){return c.y;}));
-        var row = cards.filter(function(c){ return Math.abs(c.y - targetY) <= rowTol; });
-        var t = row.reduce(function(a,b){ return Math.abs(a.x-mouseX) < Math.abs(b.x-mouseX)?a:b; });
-        return {action: 'move', x: t.x, y: t.y};
-    } else {
-        var rowCards = cards.filter(function(c){ return Math.abs(c.y - mouseY) <= rowTol; });
-        if (!rowCards.length) rowCards = cards;
-        var thresh = function(c){ return Math.round(c.w / 3); };
-        var cands = key === 'Left'
-            ? rowCards.filter(function(c){ return c.x < mouseX - thresh(c); })
-            : rowCards.filter(function(c){ return c.x > mouseX + thresh(c); });
-        if (cands.length) {
-            var t = key === 'Left'
-                ? cands.reduce(function(a,b){return a.x>b.x?a:b;})
-                : cands.reduce(function(a,b){return a.x<b.x?a:b;});
-            return {action: 'move', x: t.x, y: t.y};
-        }
-        // No card — try to click row arrow button
-        var btns = Array.from(document.querySelectorAll('button, [role="button"], a'));
-        var arrows = btns.filter(function(el) {
-            var r = el.getBoundingClientRect();
-            if (r.width < 5 || r.height < 5 || r.width > 120 || r.height > 120) return false;
-            if (Math.abs((r.top + r.height/2) - mouseY) > rowTol * 3) return false;
-            var text = (el.textContent||'').trim();
-            var aria = (el.getAttribute('aria-label')||'').toLowerCase();
-            var cls  = (el.className||'').toLowerCase();
-            var isArrow = /[›»>❯→▶⟩]/.test(text)||/[‹«<❮←◀⟨]/.test(text)||
-                          aria.includes('next')||aria.includes('prev')||
-                          cls.includes('arrow')||cls.includes('chevron')||
-                          cls.includes('next')||cls.includes('prev')||
-                          cls.includes('slider');
-            if (!isArrow) return false;
-            var cx = r.left + r.width/2;
-            return key === 'Right' ? cx > mouseX : cx < mouseX;
-        });
-        if (arrows.length) {
-            arrows.sort(function(a,b){
-                var ax=a.getBoundingClientRect().left, bx=b.getBoundingClientRect().left;
-                return key==='Right' ? ax-bx : bx-ax;
-            });
-            arrows[0].click();
-            return {action: 'arrow_clicked'};
-        }
-        return {action: 'none'};
-    }
-})('%s', %d, %d, %d, %d)
+CLICK_ARROW_JS = """
+(function(mouseX, mouseY, direction, rowTol) {
+    var btns = Array.from(document.querySelectorAll('button, [role="button"], a'));
+    var arrows = btns.filter(function(el) {
+        var r = el.getBoundingClientRect();
+        if (r.width < 5 || r.height < 5 || r.width > 120 || r.height > 120) return false;
+        if (Math.abs((r.top + r.height/2) - mouseY) > rowTol) return false;
+        var text = (el.textContent||'').trim();
+        var aria = (el.getAttribute('aria-label')||'').toLowerCase();
+        var cls  = (el.className||'').toLowerCase();
+        var isArrow = /[›»>❯→▶⟩]/.test(text)||/[‹«<❮←◀⟨]/.test(text)||
+                      aria.includes('next')||aria.includes('prev')||
+                      cls.includes('arrow')||cls.includes('chevron')||
+                      cls.includes('next')||cls.includes('prev')||cls.includes('slider');
+        if (!isArrow) return false;
+        var cx = r.left + r.width/2;
+        return direction === 'Right' ? cx > mouseX : cx < mouseX;
+    });
+    if (!arrows.length) return false;
+    arrows.sort(function(a,b){
+        var ax=a.getBoundingClientRect().left, bx=b.getBoundingClientRect().left;
+        return direction==='Right' ? ax-bx : bx-ax;
+    });
+    arrows[0].click();
+    return true;
+})(%d, %d, '%s', %d)
 """
 
 
+def _nav_find_target(cards: list, cur_x: int, cur_y: int, key: str):
+    """Pure Python navigation logic. Returns ('move', card) | ('scroll', dy) | ('arrow', None) | ('none', None)."""
+    ROW_TOL = 40
+    if key in ("Up", "Down"):
+        if key == "Up":
+            cands = [c for c in cards if c["y"] < cur_y - ROW_TOL]
+            if not cands: return "scroll", -400
+            row_y = max(c["y"] for c in cands)
+        else:
+            cands = [c for c in cards if c["y"] > cur_y + ROW_TOL]
+            if not cands: return "scroll", 400
+            row_y = min(c["y"] for c in cands)
+        row = [c for c in cards if abs(c["y"] - row_y) <= ROW_TOL]
+        return "move", min(row, key=lambda c: abs(c["x"] - cur_x))
+    else:
+        row_cards = [c for c in cards if abs(c["y"] - cur_y) <= ROW_TOL] or cards
+        if key == "Left":
+            cands = [c for c in row_cards if c["x"] < cur_x - c["w"] // 3]
+            t = max(cands, key=lambda c: c["x"]) if cands else None
+        else:
+            cands = [c for c in row_cards if c["x"] > cur_x + c["w"] // 3]
+            t = min(cands, key=lambda c: c["x"]) if cands else None
+        if t: return "move", t
+        return "arrow", None
+
+
 async def cdp_navigate(key: str) -> None:
-    cur_x, cur_y = get_mouse_css_pos()
-    js = COMBINED_NAV_JS % (key, cur_x, cur_y, CARD_MIN_SIZE, 40)
+    global _cards_cache, _cards_time
+    ROW_TOL = 40
 
-    try:
-        result = await cdp_send(js)
-    except Exception as e:
-        log.debug("CDP navigate failed: %s", e)
-        run_xdotool(["xdotool", "key", key])
+    cur_x, cur_y = _mouse_css[0], _mouse_css[1]
+
+    # Refresh card cache only when stale
+    now = _time.monotonic()
+    if _cards_cache is None or (now - _cards_time) > CARDS_TTL:
+        try:
+            _cards_cache = await cdp_send(GET_CARDS_JS)
+            _cards_time = _time.monotonic()
+        except Exception as e:
+            log.debug("CDP get cards failed: %s", e)
+            run_xdotool(["xdotool", "key", key])
+            return
+
+    if not _cards_cache:
         return
 
-    if not result:
-        return
+    action, payload = _nav_find_target(_cards_cache, cur_x, cur_y, key)
 
-    act = result.get("action")
-    if act == "move":
+    if action == "move":
+        nx, ny = payload["x"], payload["y"]
         run_xdotool(["xdotool", "mousemove",
-                     str(result["x"] * DEVICE_SCALE),
-                     str(result["y"] * DEVICE_SCALE)])
-        log.debug("%s → card at css(%d,%d)", key, result["x"], result["y"])
-    elif act == "scroll":
-        await cdp_send(f"window.scrollBy(0, {result['dy']})")
-    elif act == "arrow_clicked":
-        log.debug("%s → clicked row arrow", key)
+                     str(nx * DEVICE_SCALE), str(ny * DEVICE_SCALE)])
+        update_mouse(nx, ny)
+        _cards_cache = None  # invalidate so next press gets fresh positions
+        log.debug("%s → card at css(%d,%d)", key, nx, ny)
+    elif action == "scroll":
+        await cdp_send(f"window.scrollBy(0, {payload})")
+        _cards_cache = None
+    elif action == "arrow":
+        js = CLICK_ARROW_JS % (cur_x, cur_y, key, ROW_TOL * 3)
+        await cdp_send(js)
+        _cards_cache = None
 
 
 def focus_chromium() -> None:
@@ -339,6 +331,7 @@ async def handle_action(data: dict) -> None:
         dx = int(data.get("dx", 0))
         dy = int(data.get("dy", 0))
         run_xdotool(["xdotool", "mousemove_relative", "--", str(dx), str(dy)])
+        update_mouse(_mouse_css[0] + dx // DEVICE_SCALE, _mouse_css[1] + dy // DEVICE_SCALE)
     elif action in NAV_KEYS:
         await cdp_navigate(NAV_KEYS[action])
     elif action == "select":
