@@ -356,6 +356,7 @@
             <button data-action="reload">RELOAD</button>
             <button data-action="restart_browser" id="restartBtn">↺</button>
             <button id="keyboardBtn">⌨</button>
+            <button id="refreshRemoteBtn" title="Refresh remote">⟳</button>
         </div>
 
         <!-- Touchpad -->
@@ -416,6 +417,11 @@
         // Keyboard
         const overlay = document.getElementById("keyboardOverlay");
         const keyboardInput = document.getElementById("keyboardInput");
+
+        document.getElementById("refreshRemoteBtn").addEventListener("pointerdown", e => {
+            e.preventDefault();
+            window.location.reload();
+        });
 
         document.getElementById("keyboardBtn").addEventListener("pointerdown", e => {
             e.preventDefault();
