@@ -220,6 +220,12 @@
         .util-row button:active { background: #252525; transform: scale(0.95); color: #aaa; }
         #keyboardBtn { font-size: 16px; color: #555; }
         #keyboardBtn:active { color: #aaa; }
+        /* TV reload — amber tint */
+        [data-action="reload"] { color: #b87d2a; border-color: #3a2e1a; background: #1e1a10; }
+        [data-action="reload"]:active { background: #2e2510; color: #d4922e; }
+        /* Remote refresh — teal tint */
+        #refreshRemoteBtn { color: #2a8a8a; border-color: #1a3333; background: #101e1e; }
+        #refreshRemoteBtn:active { background: #152b2b; color: #33aaaa; }
 
         /* Touchpad */
         .touchpad-label {
@@ -353,10 +359,10 @@
         <!-- Utility -->
         <div class="util-row">
             <button data-action="tab">TAB</button>
-            <button data-action="reload">RELOAD</button>
+            <button data-action="reload">↺ TV</button>
             <button data-action="restart_browser" id="restartBtn">↺</button>
             <button id="keyboardBtn">⌨</button>
-            <button id="refreshRemoteBtn" title="Refresh remote">⟳</button>
+            <button id="refreshRemoteBtn">⟳ APP</button>
         </div>
 
         <!-- Touchpad -->
