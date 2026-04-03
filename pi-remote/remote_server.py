@@ -193,8 +193,17 @@ GET_CARDS_JS = """
     if (!document.getElementById('_rm_fast_tx')) {
         var s = document.createElement('style');
         s.id = '_rm_fast_tx';
-        s.textContent = '* { transition-duration: 80ms !important; transition-delay: 0s !important; animation-duration: 80ms !important; }';
+        s.textContent = '* { transition-duration: 80ms !important; transition-delay: 0s !important; animation-duration: 80ms !important; animation-delay: 0s !important; }';
         document.head.appendChild(s);
+    }
+    // Patch setTimeout to eliminate intentional hover-delay timers (≤500ms)
+    if (!window._rmStPatched) {
+        window._rmStPatched = true;
+        var _origST = window.setTimeout;
+        window.setTimeout = function(fn, delay) {
+            var args = Array.prototype.slice.call(arguments, 2);
+            return _origST.apply(window, [fn, (delay > 0 && delay <= 500) ? 0 : delay].concat(args));
+        };
     }
     var all = document.querySelectorAll('a, [role="link"], [role="button"], button');
     var cards = [];
