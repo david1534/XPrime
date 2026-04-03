@@ -41,6 +41,15 @@ CARD_MIN_SIZE = 80
 # CDP returns CSS pixels; xdotool needs physical X11 pixels.
 DEVICE_SCALE = 2
 
+# --- Runtime-adjustable settings (overridden by client settings action) ---
+_settings = {
+    "transition": 80,   # ms — CSS transition override
+    "rowTol":     40,   # px — vertical tolerance for same-row detection
+    "scroll":     400,  # px — page scroll on up/down edge
+    "cache":      2.0,  # s  — card position cache TTL
+    "scale":      2,    # device scale factor
+}
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -185,17 +194,20 @@ def update_mouse(x: int, y: int) -> None:
 import time as _time
 _cards_cache: list | None = None
 _cards_time: float = 0.0
-CARDS_TTL = 2.0  # seconds — card layout is static, no need to re-query often
+def CARDS_TTL() -> float: return _settings["cache"]
 
 
-GET_CARDS_JS = """
+def GET_CARDS_JS() -> str:
+    tx = int(_settings["transition"])
+    return """
 (function(cardMin) {
-    if (!document.getElementById('_rm_fast_tx')) {
-        var s = document.createElement('style');
-        s.id = '_rm_fast_tx';
-        s.textContent = '* { transition-duration: 80ms !important; transition-delay: 0s !important; animation-duration: 80ms !important; animation-delay: 0s !important; }';
-        document.head.appendChild(s);
+    var style = document.getElementById('_rm_fast_tx');
+    if (!style) {
+        style = document.createElement('style');
+        style.id = '_rm_fast_tx';
+        document.head.appendChild(style);
     }
+    style.textContent = '* { transition-duration: %(tx)dms !important; transition-delay: 0s !important; animation-duration: %(tx)dms !important; animation-delay: 0s !important; }';
     var all = document.querySelectorAll('a, [role="link"], [role="button"], button');
     var cards = [];
     for (var i = 0; i < all.length; i++) {
@@ -205,8 +217,8 @@ GET_CARDS_JS = """
                         w: Math.round(r.width), h: Math.round(r.height)});
     }
     return cards;
-})(%d)
-""" % CARD_MIN_SIZE
+})(%(cardMin)d)
+""" % {"tx": tx, "cardMin": CARD_MIN_SIZE}
 
 CLICK_ARROW_JS = """
 (function(mouseX, mouseY, direction, rowTol) {
@@ -239,15 +251,16 @@ CLICK_ARROW_JS = """
 
 def _nav_find_target(cards: list, cur_x: int, cur_y: int, key: str):
     """Pure Python navigation logic. Returns ('move', card) | ('scroll', dy) | ('arrow', None) | ('none', None)."""
-    ROW_TOL = 40
+    ROW_TOL = int(_settings["rowTol"])
+    SCROLL  = int(_settings["scroll"])
     if key in ("Up", "Down"):
         if key == "Up":
             cands = [c for c in cards if c["y"] < cur_y - ROW_TOL]
-            if not cands: return "scroll", -400
+            if not cands: return "scroll", -SCROLL
             row_y = max(c["y"] for c in cands)
         else:
             cands = [c for c in cards if c["y"] > cur_y + ROW_TOL]
-            if not cands: return "scroll", 400
+            if not cands: return "scroll", SCROLL
             row_y = min(c["y"] for c in cands)
         row = [c for c in cards if abs(c["y"] - row_y) <= ROW_TOL]
         return "move", min(row, key=lambda c: abs(c["x"] - cur_x))
@@ -265,15 +278,15 @@ def _nav_find_target(cards: list, cur_x: int, cur_y: int, key: str):
 
 async def cdp_navigate(key: str) -> None:
     global _cards_cache, _cards_time
-    ROW_TOL = 40
+    ROW_TOL = int(_settings["rowTol"])
 
     cur_x, cur_y = _mouse_css[0], _mouse_css[1]
 
     # Refresh card cache only when stale
     now = _time.monotonic()
-    if _cards_cache is None or (now - _cards_time) > CARDS_TTL:
+    if _cards_cache is None or (now - _cards_time) > CARDS_TTL():
         try:
-            _cards_cache = await cdp_send(GET_CARDS_JS)
+            _cards_cache = await cdp_send(GET_CARDS_JS())
             _cards_time = _time.monotonic()
         except Exception as e:
             log.debug("CDP get cards failed: %s", e)
@@ -296,6 +309,7 @@ async def cdp_navigate(key: str) -> None:
     elif action == "arrow":
         js = CLICK_ARROW_JS % (cur_x, cur_y, key, ROW_TOL * 3)
         await cdp_send(js)
+        _cards_cache = None
 
 
 def focus_chromium() -> None:
@@ -345,6 +359,39 @@ async def handle_action(data: dict) -> None:
         if text:
             focus_chromium()
             run_xdotool(["xdotool", "type", "--clearmodifiers", "--", text])
+    elif action == "settings":
+        new = data.get("settings", {})
+        scale_changed = "scale" in new and float(new["scale"]) != float(_settings["scale"])
+        _settings.update({k: new[k] for k in new if k in _settings})
+        _cards_cache = None  # flush cache so new transition/rowTol takes effect immediately
+        log.info("Settings updated: %s", _settings)
+        if scale_changed:
+            scale = float(_settings["scale"])
+            # Update autostart and restart Chromium with new scale
+            subprocess.run(
+                ["sed", "-i",
+                 f"s/--force-device-scale-factor=[^ ]*/--force-device-scale-factor={scale}/",
+                 "/home/david1534/.config/autostart/kiosk.desktop"],
+                timeout=5)
+            DEVICE_SCALE = scale  # update global
+            log.info("Scale factor changed to %s — restarting Chromium", scale)
+            subprocess.run(["pkill", "-u", "david1534", "chromium"], capture_output=True, timeout=5)
+            import time as _t; _t.sleep(3)
+            chromium_cmd = (
+                f"DISPLAY=:0 XAUTHORITY=/home/david1534/.Xauthority HOME=/home/david1534 "
+                f"/usr/bin/chromium --kiosk --noerrdialogs --disable-infobars "
+                f"--disable-session-crashed-bubble --disable-translate --no-first-run --fast --fast-start "
+                f"--disable-features=TranslateUI --disable-pinch --overscroll-history-navigation=0 "
+                f"--start-fullscreen --enable-features=VaapiVideoDecoder "
+                f"--check-for-update-interval=31536000 --password-store=basic "
+                f"--load-extension=/home/david1534/extensions/ublock/uBlock0.chromium "
+                f"--enable-spatial-navigation --remote-debugging-port={CDP_PORT} "
+                f"--force-device-scale-factor={scale} "
+                f"--num-raster-threads=4 --enable-zero-copy --disable-gpu-vsync "
+                f"https://xprime.tv"
+            )
+            subprocess.Popen(["sudo", "-u", "david1534", "bash", "-c", chromium_cmd],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     elif action == "restart_browser":
         log.info("Restarting Chromium...")
         subprocess.run(["pkill", "-u", "david1534", "chromium"],
