@@ -23,7 +23,7 @@ ExecStart=/usr/bin/chromium \
     --start-fullscreen \
     --enable-features=VaapiVideoDecoder \
     --check-for-update-interval=31536000 \
-    --force-device-scale-factor=3 \
+    --force-device-scale-factor=2 \
     --remote-debugging-port=9222 \
     https://xprime.tv
 Restart=always

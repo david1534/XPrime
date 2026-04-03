@@ -39,7 +39,7 @@ CARD_MIN_SIZE = 80
 
 # Must match --force-device-scale-factor in kiosk launch command.
 # CDP returns CSS pixels; xdotool needs physical X11 pixels.
-DEVICE_SCALE = 3
+DEVICE_SCALE = 2
 
 logging.basicConfig(
     level=logging.INFO,
