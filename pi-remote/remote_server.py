@@ -145,14 +145,11 @@ async def cdp_send(expression: str):
     global _cdp_conn, _cdp_url, _cdp_msg_id
     from websockets.asyncio.client import connect as cdp_connect
 
-    # Reconnect if needed
-    ws_url = get_cdp_ws_url()
-    if ws_url != _cdp_url or _cdp_conn is None:
-        if _cdp_conn is not None:
-            try:
-                await _cdp_conn.close()
-            except Exception:
-                pass
+    # Only fetch the WS URL when we don't have a live connection
+    if _cdp_conn is None:
+        ws_url = get_cdp_ws_url()
+        if not ws_url:
+            return None
         _cdp_conn = await cdp_connect(ws_url, open_timeout=3)
         _cdp_url = ws_url
 
@@ -188,7 +185,7 @@ def update_mouse(x: int, y: int) -> None:
 import time as _time
 _cards_cache: list | None = None
 _cards_time: float = 0.0
-CARDS_TTL = 0.35  # seconds
+CARDS_TTL = 2.0  # seconds — card layout is static, no need to re-query often
 
 
 GET_CARDS_JS = """
@@ -293,15 +290,12 @@ async def cdp_navigate(key: str) -> None:
         run_xdotool(["xdotool", "mousemove",
                      str(nx * DEVICE_SCALE), str(ny * DEVICE_SCALE)])
         update_mouse(nx, ny)
-        _cards_cache = None  # invalidate so next press gets fresh positions
         log.debug("%s → card at css(%d,%d)", key, nx, ny)
     elif action == "scroll":
         await cdp_send(f"window.scrollBy(0, {payload})")
-        _cards_cache = None
     elif action == "arrow":
         js = CLICK_ARROW_JS % (cur_x, cur_y, key, ROW_TOL * 3)
         await cdp_send(js)
-        _cards_cache = None
 
 
 def focus_chromium() -> None:
