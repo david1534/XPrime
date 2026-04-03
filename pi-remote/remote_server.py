@@ -207,7 +207,8 @@ def GET_CARDS_JS() -> str:
         style.id = '_rm_fast_tx';
         document.head.appendChild(style);
     }
-    style.textContent = '* { transition-duration: %(tx)dms !important; transition-delay: 0s !important; animation-duration: %(tx)dms !important; animation-delay: 0s !important; }';
+    var tx = %(tx)d;
+    style.textContent = '* { transition-duration: ' + tx + 'ms !important; transition-delay: 0s !important; animation-duration: ' + tx + 'ms !important; animation-delay: 0s !important; }';
     var all = document.querySelectorAll('a, [role="link"], [role="button"], button');
     var cards = [];
     for (var i = 0; i < all.length; i++) {
@@ -338,8 +339,9 @@ async def handle_action(data: dict) -> None:
     elif action == "mouse_move":
         dx = int(data.get("dx", 0))
         dy = int(data.get("dy", 0))
-        run_xdotool(["xdotool", "mousemove_relative", "--", str(dx), str(dy)])
         update_mouse(_mouse_css[0] + dx // DEVICE_SCALE, _mouse_css[1] + dy // DEVICE_SCALE)
+        loop = asyncio.get_event_loop()
+        loop.run_in_executor(None, run_xdotool, ["xdotool", "mousemove_relative", "--", str(dx), str(dy)])
     elif action in NAV_KEYS:
         await cdp_navigate(NAV_KEYS[action])
     elif action == "select":

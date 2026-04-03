@@ -521,6 +521,7 @@
             </div>
 
             <button class="setting-apply-btn" id="settingsApply">Apply &amp; Save</button>
+            <button class="setting-apply-btn" id="settingsReset" style="margin-top:8px;background:#1e1e1e;border-color:#333;color:#888;">Reset to Defaults</button>
         </div>
     </div>
 
@@ -647,6 +648,20 @@
             localStorage.setItem("xremote_settings", JSON.stringify(settings));
             send({ action: "settings", settings });
             settingsOverlay.classList.remove("open");
+        });
+
+        document.getElementById("settingsReset").addEventListener("pointerdown", e => {
+            e.preventDefault();
+            Object.assign(settings, DEFAULTS);
+            localStorage.setItem("xremote_settings", JSON.stringify(settings));
+            // Update all sliders to reflect defaults
+            bindSlider("Sensitivity", "sensitivity");
+            bindSlider("Transition",  "transition");
+            bindSlider("RowTol",      "rowTol");
+            bindSlider("Scroll",      "scroll");
+            bindSlider("Cache",       "cache", 1);
+            bindSlider("Scale",       "scale", 1);
+            send({ action: "settings", settings });
         });
 
         // Touchpad
