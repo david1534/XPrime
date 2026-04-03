@@ -24,6 +24,9 @@ ExecStart=/usr/bin/chromium \
     --enable-features=VaapiVideoDecoder \
     --check-for-update-interval=31536000 \
     --force-device-scale-factor=2 \
+    --num-raster-threads=4 \
+    --enable-zero-copy \
+    --disable-gpu-vsync \
     --remote-debugging-port=9222 \
     https://xprime.tv
 Restart=always
