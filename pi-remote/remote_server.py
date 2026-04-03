@@ -197,18 +197,24 @@ _cards_time: float = 0.0
 def CARDS_TTL() -> float: return _settings["cache"]
 
 
-def GET_CARDS_JS() -> str:
+def INJECT_CSS_JS() -> str:
+    """One-time CSS injection — only re-injects if transition value changed."""
     tx = int(_settings["transition"])
     return """
-(function(cardMin) {
+(function(tx) {
     var style = document.getElementById('_rm_fast_tx');
     if (!style) {
         style = document.createElement('style');
         style.id = '_rm_fast_tx';
         document.head.appendChild(style);
     }
-    var tx = %(tx)d;
-    style.textContent = '* { transition-duration: ' + tx + 'ms !important; transition-delay: 0s !important; animation-duration: ' + tx + 'ms !important; animation-delay: 0s !important; }';
+    var expected = '* { transition-duration: ' + tx + 'ms !important; transition-delay: 0s !important; animation-duration: ' + tx + 'ms !important; animation-delay: 0s !important; }';
+    if (style.textContent !== expected) style.textContent = expected;
+})(%d)
+""" % tx
+
+GET_CARDS_JS = """
+(function(cardMin) {
     var all = document.querySelectorAll('a, [role="link"], [role="button"], button');
     var cards = [];
     for (var i = 0; i < all.length; i++) {
@@ -218,8 +224,11 @@ def GET_CARDS_JS() -> str:
                         w: Math.round(r.width), h: Math.round(r.height)});
     }
     return cards;
-})(%(cardMin)d)
-""" % {"tx": tx, "cardMin": CARD_MIN_SIZE}
+})(%d)
+""" % CARD_MIN_SIZE
+
+# Track whether CSS has been injected this session
+_css_injected_tx: int = -1
 
 CLICK_ARROW_JS = """
 (function(mouseX, mouseY, direction, rowTol) {
@@ -278,16 +287,25 @@ def _nav_find_target(cards: list, cur_x: int, cur_y: int, key: str):
 
 
 async def cdp_navigate(key: str) -> None:
-    global _cards_cache, _cards_time
+    global _cards_cache, _cards_time, _css_injected_tx
     ROW_TOL = int(_settings["rowTol"])
 
     cur_x, cur_y = _mouse_css[0], _mouse_css[1]
+
+    # Inject/update CSS only when transition value has changed
+    tx = int(_settings["transition"])
+    if tx != _css_injected_tx:
+        try:
+            await cdp_send(INJECT_CSS_JS())
+            _css_injected_tx = tx
+        except Exception:
+            pass
 
     # Refresh card cache only when stale
     now = _time.monotonic()
     if _cards_cache is None or (now - _cards_time) > CARDS_TTL():
         try:
-            _cards_cache = await cdp_send(GET_CARDS_JS())
+            _cards_cache = await cdp_send(GET_CARDS_JS)
             _cards_time = _time.monotonic()
         except Exception as e:
             log.debug("CDP get cards failed: %s", e)
@@ -340,8 +358,9 @@ async def handle_action(data: dict) -> None:
         dx = int(data.get("dx", 0))
         dy = int(data.get("dy", 0))
         update_mouse(_mouse_css[0] + dx // DEVICE_SCALE, _mouse_css[1] + dy // DEVICE_SCALE)
-        loop = asyncio.get_event_loop()
-        loop.run_in_executor(None, run_xdotool, ["xdotool", "mousemove_relative", "--", str(dx), str(dy)])
+        asyncio.get_running_loop().run_in_executor(
+            None, run_xdotool, ["xdotool", "mousemove_relative", "--", str(dx), str(dy)]
+        )
     elif action in NAV_KEYS:
         await cdp_navigate(NAV_KEYS[action])
     elif action == "select":
@@ -365,7 +384,8 @@ async def handle_action(data: dict) -> None:
         new = data.get("settings", {})
         scale_changed = "scale" in new and float(new["scale"]) != float(_settings["scale"])
         _settings.update({k: new[k] for k in new if k in _settings})
-        _cards_cache = None  # flush cache so new transition/rowTol takes effect immediately
+        _cards_cache = None
+        _css_injected_tx = -1  # force CSS re-injection with new transition value
         log.info("Settings updated: %s", _settings)
         if scale_changed:
             scale = float(_settings["scale"])
