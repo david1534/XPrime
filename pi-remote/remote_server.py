@@ -389,6 +389,7 @@ def focus_chromium() -> None:
 
 
 async def handle_action(data: dict) -> None:
+    global DEVICE_SCALE, _chromium_win_id, _cdp_conn
     action = data.get("action")
     if not action:
         return
@@ -447,7 +448,6 @@ async def handle_action(data: dict) -> None:
         _css_injected_tx = -1  # force CSS re-injection with new transition value
         log.info("Settings updated: %s", _settings)
         if scale_changed:
-            global DEVICE_SCALE
             scale = float(_settings["scale"])
             # Update autostart and restart Chromium with new scale
             subprocess.run(
@@ -475,7 +475,6 @@ async def handle_action(data: dict) -> None:
             subprocess.Popen(["sudo", "-u", "david1534", "bash", "-c", chromium_cmd],
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     elif action == "restart_browser":
-        global _chromium_win_id, _cdp_conn
         log.info("Restarting Chromium...")
         _chromium_win_id = None
         _cdp_conn = None
