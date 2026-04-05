@@ -93,13 +93,14 @@ def run_xdotool(cmd: list[str]) -> None:
         log.error("xdotool not found.")
 
 
-def get_cdp_ws_url() -> str | None:
+def _get_cdp_tab() -> dict | None:
+    """Return the first 'page' tab dict from the CDP JSON endpoint."""
     try:
         with urllib.request.urlopen(f"http://localhost:{CDP_PORT}/json", timeout=2) as r:
             tabs = json.loads(r.read())
         for tab in tabs:
             if tab.get("type") == "page":
-                return tab.get("webSocketDebuggerUrl")
+                return tab
     except Exception:
         pass
     return None
@@ -147,20 +148,43 @@ async def cdp_eval(cdp_ws_url: str, expression: str) -> object:
 _cdp_conn = None
 _cdp_url = None
 _cdp_msg_id = 0
+_cdp_page_url = None        # track page URL to detect navigation
+_cdp_page_check_time = 0.0  # last time we polled CDP for page URL (rate-limit the HTTP call)
+CDP_PAGE_POLL_INTERVAL = 2.0  # seconds between page-URL checks
 
 
 async def cdp_send(expression: str):
     """Send a JS expression over the persistent CDP connection, return value."""
-    global _cdp_conn, _cdp_url, _cdp_msg_id
+    global _cdp_conn, _cdp_url, _cdp_msg_id, _cdp_page_url, _cdp_page_check_time
+    global _cards_cache, _css_injected_tx
     from websockets.asyncio.client import connect as cdp_connect
 
     # Only fetch the WS URL when we don't have a live connection
     if _cdp_conn is None:
-        ws_url = get_cdp_ws_url()
-        if not ws_url:
+        tab = _get_cdp_tab()
+        if not tab:
             return None
+        ws_url = tab.get("webSocketDebuggerUrl")
+        page_url = tab.get("url", "")
         _cdp_conn = await cdp_connect(ws_url, open_timeout=3)
         _cdp_url = ws_url
+        _cdp_page_url = page_url
+        _cdp_page_check_time = _time.monotonic()
+        _cards_cache = None
+        _css_injected_tx = -1
+    else:
+        # Check if page has navigated — but only poll CDP HTTP once per interval
+        now = _time.monotonic()
+        if now - _cdp_page_check_time >= CDP_PAGE_POLL_INTERVAL:
+            _cdp_page_check_time = now
+            tab = _get_cdp_tab()
+            if tab:
+                current_page_url = tab.get("url", "")
+                if current_page_url != _cdp_page_url:
+                    log.debug("Page navigated, invalidating caches")
+                    _cdp_page_url = current_page_url
+                    _cards_cache = None
+                    _css_injected_tx = -1
 
     _cdp_msg_id += 1
     msg_id = _cdp_msg_id
@@ -179,6 +203,14 @@ async def cdp_send(expression: str):
         log.debug("CDP send failed, will reconnect next call: %s", e)
         _cdp_conn = None
     return None
+
+
+# Cached Chromium window ID to avoid repeated xdotool search
+_chromium_win_id: str | None = None
+
+# Mouse-move in-flight throttle — accumulate delta when a move is already queued
+_mouse_pending: bool = False
+_mouse_pending_delta: list = [0, 0]  # accumulated [dx, dy] while throttled
 
 
 # --- Mouse position tracked in Python (avoids xdotool subprocess per press) ---
@@ -319,9 +351,11 @@ async def cdp_navigate(key: str) -> None:
 
     if action == "move":
         nx, ny = payload["x"], payload["y"]
-        run_xdotool(["xdotool", "mousemove",
-                     str(nx * DEVICE_SCALE), str(ny * DEVICE_SCALE)])
         update_mouse(nx, ny)
+        asyncio.get_running_loop().run_in_executor(
+            None, run_xdotool,
+            ["xdotool", "mousemove", str(nx * DEVICE_SCALE), str(ny * DEVICE_SCALE)]
+        )
         log.debug("%s → card at css(%d,%d)", key, nx, ny)
     elif action == "scroll":
         await cdp_send(f"window.scrollBy(0, {payload})")
@@ -332,15 +366,26 @@ async def cdp_navigate(key: str) -> None:
 
 
 def focus_chromium() -> None:
+    global _chromium_win_id
     env = os.environ.copy()
     env["DISPLAY"] = DISPLAY
     try:
+        if _chromium_win_id:
+            # Try cached ID first; it's valid as long as Chromium hasn't been restarted
+            result = subprocess.run(
+                ["xdotool", "windowfocus", _chromium_win_id],
+                env=env, timeout=3, capture_output=True)
+            if result.returncode == 0:
+                return
+            # Cached ID stale — fall through to re-search
+            _chromium_win_id = None
         win_id = subprocess.check_output(
             ["xdotool", "search", "--onlyvisible", "--class", "chromium"],
             env=env, timeout=3).decode().strip().split()[0]
+        _chromium_win_id = win_id
         run_xdotool(["xdotool", "windowfocus", win_id])
     except Exception:
-        pass
+        _chromium_win_id = None
 
 
 async def handle_action(data: dict) -> None:
@@ -355,12 +400,26 @@ async def handle_action(data: dict) -> None:
         for _ in range(SCROLL_REPEAT):
             run_xdotool(["xdotool", "click", "5"])
     elif action == "mouse_move":
+        global _mouse_pending, _mouse_pending_delta
         dx = int(data.get("dx", 0))
         dy = int(data.get("dy", 0))
         update_mouse(_mouse_css[0] + dx // DEVICE_SCALE, _mouse_css[1] + dy // DEVICE_SCALE)
-        asyncio.get_running_loop().run_in_executor(
-            None, run_xdotool, ["xdotool", "mousemove_relative", "--", str(dx), str(dy)]
-        )
+        if _mouse_pending:
+            # A move is already queued — accumulate into it instead of spawning another process
+            _mouse_pending_delta[0] += dx
+            _mouse_pending_delta[1] += dy
+        else:
+            _mouse_pending = True
+            _mouse_pending_delta[0] = dx
+            _mouse_pending_delta[1] = dy
+            def _do_mouse_move():
+                global _mouse_pending
+                adx, ady = _mouse_pending_delta[0], _mouse_pending_delta[1]
+                _mouse_pending_delta[0] = 0
+                _mouse_pending_delta[1] = 0
+                run_xdotool(["xdotool", "mousemove_relative", "--", str(adx), str(ady)])
+                _mouse_pending = False  # release only after xdotool finishes
+            asyncio.get_running_loop().run_in_executor(None, _do_mouse_move)
     elif action in NAV_KEYS:
         await cdp_navigate(NAV_KEYS[action])
     elif action == "select":
@@ -388,6 +447,7 @@ async def handle_action(data: dict) -> None:
         _css_injected_tx = -1  # force CSS re-injection with new transition value
         log.info("Settings updated: %s", _settings)
         if scale_changed:
+            global DEVICE_SCALE
             scale = float(_settings["scale"])
             # Update autostart and restart Chromium with new scale
             subprocess.run(
@@ -415,7 +475,10 @@ async def handle_action(data: dict) -> None:
             subprocess.Popen(["sudo", "-u", "david1534", "bash", "-c", chromium_cmd],
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     elif action == "restart_browser":
+        global _chromium_win_id, _cdp_conn
         log.info("Restarting Chromium...")
+        _chromium_win_id = None
+        _cdp_conn = None
         subprocess.run(["pkill", "-u", "david1534", "chromium"],
                        capture_output=True, timeout=5)
         import time; time.sleep(3)

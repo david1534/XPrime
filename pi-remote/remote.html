@@ -561,10 +561,10 @@
             ws.onerror = () => ws.close();
         }
 
-        function send(data) {
+        function send(data, vibrate=true) {
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify(data));
-                if (navigator.vibrate) navigator.vibrate(8);
+                if (vibrate && navigator.vibrate) navigator.vibrate(8);
             }
         }
 
@@ -667,12 +667,23 @@
         // Touchpad
         const touchpad = document.getElementById("touchpad");
         let tx = 0, ty = 0, moved = false;
+        let pendingDx = 0, pendingDy = 0, rafPending = false;
+
+        function flushMouseMove() {
+            rafPending = false;
+            if (pendingDx !== 0 || pendingDy !== 0) {
+                send({ action: "mouse_move", dx: pendingDx, dy: pendingDy }, false);
+                pendingDx = 0;
+                pendingDy = 0;
+            }
+        }
 
         touchpad.addEventListener("touchstart", e => {
             e.preventDefault();
             tx = e.touches[0].clientX;
             ty = e.touches[0].clientY;
             moved = false;
+            pendingDx = 0; pendingDy = 0; rafPending = false;
         }, { passive: false });
 
         touchpad.addEventListener("touchmove", e => {
@@ -681,9 +692,14 @@
             const dy = e.touches[0].clientY - ty;
             if (Math.abs(dx) > 2 || Math.abs(dy) > 2) {
                 moved = true;
-                send({ action: "mouse_move", dx: Math.round(dx * settings.sensitivity), dy: Math.round(dy * settings.sensitivity) });
+                pendingDx += Math.round(dx * settings.sensitivity);
+                pendingDy += Math.round(dy * settings.sensitivity);
                 tx = e.touches[0].clientX;
                 ty = e.touches[0].clientY;
+                if (!rafPending) {
+                    rafPending = true;
+                    requestAnimationFrame(flushMouseMove);
+                }
             }
         }, { passive: false });
 
